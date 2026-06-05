@@ -1,0 +1,5 @@
+node_modules/
+.autolearn/
+.agent-improvement/
+*.log
+.DS_Store
