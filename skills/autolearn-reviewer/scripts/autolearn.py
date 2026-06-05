@@ -26,6 +26,7 @@ from pathlib import Path
 
 import yaml
 
+# @spec KS-MEM-020
 DATA_HOME = Path(os.environ.get("AUTOLEARN_HOME", Path.home() / ".autolearn"))
 MEMORY_FILE = DATA_HOME / "memory.md"
 USER_FILE = DATA_HOME / "user-profile.md"
@@ -40,6 +41,7 @@ MAX_MEMORY_CHARS = 3000
 MAX_USER_CHARS = 2000
 
 
+# @spec KS-MEM-001
 def _ensure_dirs():
     DATA_HOME.mkdir(parents=True, exist_ok=True)
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -104,6 +106,7 @@ def _slugify(text: str) -> str:
     return text[:60].rstrip("-")
 
 
+# @spec KS-MEM-015, KS-MEM-016, KS-MEM-017
 def _extract_entries(md: str) -> list[str]:
     entries = []
     in_comment = False
@@ -124,6 +127,7 @@ def _extract_entries(md: str) -> list[str]:
     return entries
 
 
+# @spec KS-MEM-018, KS-MEM-019
 def _entries_to_md(entries: list[str], header: str) -> str:
     md = f"# {header}\n\n"
     md += "<!-- Managed by autolearn. Do not edit the structure. -->\n\n"
@@ -136,6 +140,7 @@ def _total_chars(entries: list[str]) -> int:
     return sum(len(e) for e in entries)
 
 
+# @spec KS-MEM-006, KS-MEM-007, KS-MEM-008
 def _trim_entries(entries: list[str], max_chars: int) -> list[str]:
     total = _total_chars(entries)
     if total <= max_chars:
@@ -145,6 +150,7 @@ def _trim_entries(entries: list[str], max_chars: int) -> list[str]:
     return entries
 
 
+# @spec KS-MEM-005
 def _dedup(entries: list[str]) -> list[str]:
     seen = set()
     result = []
@@ -156,6 +162,7 @@ def _dedup(entries: list[str]) -> list[str]:
     return result
 
 
+# @spec KS-MEM-002
 def cmd_init(args):
     _ensure_dirs()
     if not MEMORY_FILE.exists():
@@ -167,6 +174,7 @@ def cmd_init(args):
     print(f"Initialized autolearn store at {DATA_HOME}")
 
 
+# @spec KS-MEM-003, KS-MEM-005, KS-MEM-006
 def cmd_memory_add(args):
     _ensure_dirs()
     content = args.content
@@ -178,6 +186,7 @@ def cmd_memory_add(args):
     print(f"Memory updated ({len(entries)} entries, {_total_chars(entries)} chars)")
 
 
+# @spec KS-MEM-009, KS-MEM-011
 def cmd_memory_remove(args):
     entries = _extract_entries(_read_md(MEMORY_FILE))
     keyword = args.keyword.lower()
@@ -188,6 +197,7 @@ def cmd_memory_remove(args):
     print(f"Removed {removed} entries ({len(entries)} remaining)")
 
 
+# @spec KS-MEM-012, KS-MEM-014
 def cmd_memory_list(args):
     entries = _extract_entries(_read_md(MEMORY_FILE))
     if not entries:
@@ -198,6 +208,7 @@ def cmd_memory_list(args):
     print(f"\nTotal: {len(entries)} entries, {_total_chars(entries)} chars")
 
 
+# @spec KS-MEM-004, KS-MEM-005, KS-MEM-007
 def cmd_user_add(args):
     _ensure_dirs()
     entries = _extract_entries(_read_md(USER_FILE))
@@ -208,6 +219,7 @@ def cmd_user_add(args):
     print(f"User profile updated ({len(entries)} entries)")
 
 
+# @spec KS-MEM-010, KS-MEM-011
 def cmd_user_remove(args):
     entries = _extract_entries(_read_md(USER_FILE))
     keyword = args.keyword.lower()
@@ -217,6 +229,7 @@ def cmd_user_remove(args):
     print(f"Removed {before - len(entries)} entries")
 
 
+# @spec KS-MEM-013
 def cmd_user_list(args):
     entries = _extract_entries(_read_md(USER_FILE))
     if not entries:
@@ -226,6 +239,7 @@ def cmd_user_list(args):
         print(f"  {i}. {entry}")
 
 
+# @spec SM-SC-001, SM-SC-002, SM-SC-003, SM-SC-004
 def cmd_skill_create(args):
     _ensure_dirs()
     name = _slugify(args.name)
@@ -271,6 +285,7 @@ TODO: Add specific instructions based on observed patterns.
     print(f"Created skill: {name} at {skill_dir}")
 
 
+# @spec SM-SP-001, SM-SP-002, SM-SP-003, SM-SP-004, SM-SP-005
 def cmd_skill_patch(args):
     name = _slugify(args.name)
     section = args.section
@@ -322,6 +337,7 @@ def cmd_skill_patch(args):
     print(f"Patched skill: {name} (section: {section})")
 
 
+# @spec SM-SA-001, SM-SA-002, SM-SA-003, SM-SA-004
 def cmd_skill_archive(args):
     name = _slugify(args.name)
     skill_dir = SKILLS_DIR / name
@@ -346,6 +362,7 @@ def cmd_skill_archive(args):
     print(f"Archived skill: {name}")
 
 
+# @spec SM-SL-001, SM-SL-002
 def cmd_skill_list(args):
     usage = _load_usage()
     if not usage:
@@ -360,6 +377,7 @@ def cmd_skill_list(args):
         print(f"  {name} [{state}] uses={count} patches={patches} last={last}")
 
 
+# @spec SM-SU-001, SM-SU-002
 def cmd_skill_usage(args):
     usage = _load_usage()
     if not usage:
@@ -368,6 +386,9 @@ def cmd_skill_usage(args):
     print(json.dumps(usage, indent=2))
 
 
+# @spec SM-LC-001, SM-LC-002, SM-LC-003, SM-LC-004
+# @spec SM-LC-005, SM-LC-006, SM-LC-007
+# @spec SM-LC-008, SM-LC-009, SM-LC-011, SM-LC-012
 def cmd_curator_run(args):
     config = _load_config()
     stale_days = config.get("stale_after_days", 30)
@@ -430,6 +451,7 @@ def cmd_curator_run(args):
                 print(f"  {action}: {', '.join(names)}")
 
 
+# @spec SM-LC-010
 def cmd_curator_status(args):
     state = _load_curator_state()
     usage = _load_usage()

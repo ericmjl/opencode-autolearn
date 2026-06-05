@@ -43,14 +43,17 @@ function dbg(...args) {
   try { appendFileSync(DBG_FILE, `[${new Date().toISOString()}] ${msg}\n`) } catch {}
 }
 
+// @spec CM-TC-006
 const SECRET_RE =
   /(api[_-]?key|token|secret|password|authorization|credentials?|auth)(["\s:=]+)([A-Za-z]+\s+)?([A-Za-z0-9_\-/.+=]{8,})/gi
 
+// @spec CM-TC-006
 function redact(str) {
   if (!str) return str
   return str.replace(SECRET_RE, "$1$2$3[REDACTED]")
 }
 
+// @spec KS-MEM-001 (ensures directory tree exists before any operation)
 function ensureStore() {
   mkdirSync(SKILLS_DIR, { recursive: true })
   mkdirSync(ARCHIVE_DIR, { recursive: true })
@@ -89,6 +92,7 @@ function truncate(text, maxLen) {
   return text.slice(0, maxLen - 3) + "..."
 }
 
+// @spec CM-MEM-001
 function injectInstructions() {
   try {
     const configPath = join(homedir(), ".config", "opencode", "opencode.json")
@@ -107,6 +111,7 @@ function injectInstructions() {
 
 const GUARD = Symbol.for("opencode:autolearn")
 
+// @spec CM-GUARD-001
 export const AutolearnPlugin = async (ctx) => {
   if (process.env.AUTOLEARN_DISABLED === "1") return {}
   if (process.env.AUTOLEARN_REVIEWER === "1") {
@@ -118,6 +123,7 @@ export const AutolearnPlugin = async (ctx) => {
   ensureStore()
   const config = parseConfig()
 
+  // @spec CM-GUARD-002
   const isPrimary = !globalThis[GUARD]
   if (isPrimary) globalThis[GUARD] = true
 
@@ -137,6 +143,7 @@ export const AutolearnPlugin = async (ctx) => {
 
   injectInstructions()
 
+  // @spec CM-RS-003, CM-RS-004, CM-RS-005
   async function spawnReview() {
     if (buffer.length === 0 || reviewInProgress) return
     const reviewText = buffer.map(m => m.content).join(" ")
@@ -146,6 +153,7 @@ export const AutolearnPlugin = async (ctx) => {
       return
     }
     reviewInProgress = true
+    // @spec CM-BUF-003
     const captured = [...buffer]
     buffer = []
 
@@ -154,10 +162,12 @@ export const AutolearnPlugin = async (ctx) => {
     const reviewMd = formatReview(captured)
 
     try {
+      // @spec CM-RS-007
       const reviewFile = join(REVIEWS_DIR, `review-${Date.now()}.md`)
       writeFileSync(reviewFile, reviewMd)
       dbg("REVIEW FILE WRITTEN", reviewFile)
 
+      // @spec CM-RS-008, CM-RS-009, CM-RS-010
       const args = ["run", reviewMd, "--agent", "autolearn-reviewer", "--title", "autolearn review"]
 
       const proc = Bun.spawn(["opencode", ...args], {
@@ -169,16 +179,20 @@ export const AutolearnPlugin = async (ctx) => {
       })
       proc.ref()
 
+      // @spec CM-RS-013
       logObs({ type: "review_spawned", message_count: captured.length, review_file: reviewFile })
       dbg("REVIEW SPAWNED OK via opencode run", reviewFile)
 
+      // @spec CM-RS-014
       cleanStaleReviews()
     } catch (err) {
+      // @spec CM-RS-011, CM-RS-012
       dbg("REVIEW SPAWN FAILED", err.message)
       console.error("[autolearn] Review spawn failed:", err.message)
       const fallback = join(AL_HOME, `review-failed-${Date.now()}.md`)
       writeFileSync(fallback, reviewMd)
     } finally {
+      // @spec CM-RS-005
       reviewInProgress = false
     }
   }
@@ -209,6 +223,7 @@ export const AutolearnPlugin = async (ctx) => {
     }
   }
 
+  // @spec CM-RS-006
   function formatReview(messages) {
     let md = "# Autolearn Review\n\n"
     md += "## Context\n\n"
@@ -236,15 +251,21 @@ export const AutolearnPlugin = async (ctx) => {
 
   const MAX_OBS_LINES = 1000
 
+  // @spec KS-OBS-001, KS-OBS-002, KS-OBS-003
   function logObs(obs) {
     obs.timestamp = new Date().toISOString()
     obs.project = projectName()
     try {
+      // @spec KS-OBS-005
       appendFileSync(OBS_FILE, JSON.stringify(obs) + "\n")
+      // @spec KS-OBS-004
       trimFile(OBS_FILE, MAX_OBS_LINES)
-    } catch {}
+    } catch {
+      // @spec KS-OBS-006
+    }
   }
 
+  // @spec KS-OBS-004
   function trimFile(filePath, maxLines) {
     try {
       const content = readFileSync(filePath, "utf-8")
@@ -276,15 +297,19 @@ export const AutolearnPlugin = async (ctx) => {
 
             if (!msgId || !role) break
 
+            // @spec CM-TC-003
             messageRoles.set(msgId, role)
 
             const text = messageTexts.get(msgId) || ""
             if (text && role === "assistant") {
+              // @spec CM-TC-005, CM-TC-001
               const content = redact(truncate(text, 2000))
               turnCount++
+              // @spec CM-BUF-001
               buffer.push({ role: "assistant", content, timestamp: new Date().toISOString() })
               dbg("ASSISTANT TURN", turnCount, content.length, "chars")
 
+              // @spec CM-RS-001, CM-RS-002
               const threshold = config.review_threshold || THRESHOLD_DEFAULT
               if (turnCount - lastReviewTurn >= threshold) {
                 lastReviewTurn = turnCount
@@ -295,11 +320,14 @@ export const AutolearnPlugin = async (ctx) => {
                 })
               }
             } else if (text && role === "user") {
+              // @spec CM-TC-004
               const content = redact(truncate(text, 1000))
+              // @spec CM-BUF-001
               buffer.push({ role: "user", content, timestamp: new Date().toISOString() })
               dbg("USER MESSAGE", content.length, "chars")
             }
 
+            // @spec CM-BUF-002
             const maxBuf = config.max_conversation_buffer || 50
             if (buffer.length > maxBuf) buffer = buffer.slice(-maxBuf)
 
@@ -324,11 +352,13 @@ export const AutolearnPlugin = async (ctx) => {
             const delta = props.delta || ""
             if (!msgId || !delta) break
 
+            // @spec CM-TC-002
             const existing = messageTexts.get(msgId) || ""
             messageTexts.set(msgId, existing + delta)
             break
           }
 
+          // @spec CM-IDLE-001, CM-IDLE-002, CM-IDLE-003, CM-IDLE-004
           case "session.idle": {
             const now = Date.now()
             const cooldown = config.idle_cooldown_ms || IDLE_COOLDOWN_MS
