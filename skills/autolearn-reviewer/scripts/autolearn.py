@@ -37,6 +37,7 @@ ARCHIVE_DIR = SKILLS_DIR / ".archive"
 USAGE_FILE = SKILLS_DIR / ".usage.json"
 CURATOR_STATE_FILE = DATA_HOME / ".curator_state.json"
 OBSERVATIONS_FILE = DATA_HOME / "observations.jsonl"
+AGENTS_SKILLS_DIR = Path(os.environ.get("AGENTS_SKILLS_DIR", Path.home() / ".agents" / "skills"))
 
 MAX_MEMORY_CHARS = 3000
 MAX_USER_CHARS = 2000
@@ -236,7 +237,7 @@ def cmd_user_list(args):
         print(f"  {i}. {entry}")
 
 
-# @spec SM-SC-001, SM-SC-002, SM-SC-003, SM-SC-004
+# @spec SM-SC-001, SM-SC-002, SM-SC-003, SM-SC-004, SM-SC-005
 def cmd_skill_create(args):
     _ensure_dirs()
     name = _slugify(args.name)
@@ -279,7 +280,12 @@ TODO: Add specific instructions based on observed patterns.
     }
     _save_usage(usage)
 
-    print(f"Created skill: {name} at {skill_dir}")
+    link_path = AGENTS_SKILLS_DIR / name
+    AGENTS_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    if not link_path.exists():
+        link_path.symlink_to(skill_dir)
+
+    print(f"Created skill: {name} at {skill_dir} (linked to {link_path})")
 
 
 # @spec SM-SP-001, SM-SP-002, SM-SP-003, SM-SP-004, SM-SP-005
@@ -334,7 +340,7 @@ def cmd_skill_patch(args):
     print(f"Patched skill: {name} (section: {section})")
 
 
-# @spec SM-SA-001, SM-SA-002, SM-SA-003, SM-SA-004
+# @spec SM-SA-001, SM-SA-002, SM-SA-003, SM-SA-004, SM-SA-005
 def cmd_skill_archive(args):
     name = _slugify(args.name)
     skill_dir = SKILLS_DIR / name
@@ -349,6 +355,10 @@ def cmd_skill_archive(args):
         sys.exit(1)
 
     skill_dir.rename(dest)
+
+    link_path = AGENTS_SKILLS_DIR / name
+    if link_path.is_symlink():
+        link_path.unlink()
 
     usage = _load_usage()
     if name in usage:

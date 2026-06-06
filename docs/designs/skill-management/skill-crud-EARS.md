@@ -8,6 +8,7 @@
 - [x] **SM-SC-002**: If a skill with the same slug already exists, the system shall exit with error code 1.
 - [x] **SM-SC-003**: The system shall create a SKILL.md file with YAML frontmatter containing name, description, created_by ("autolearn"), and created_at date.
 - [x] **SM-SC-004**: The system shall register the new skill in `.usage.json` with state "active", use_count 0, and patch_count 0.
+- [ ] **SM-SC-005**: The system shall create a symlink from `~/.agents/skills/{slug}` pointing to `~/.autolearn/skills/{slug}` so that OpenCode auto-discovers the skill.
 
 ## Skill Patching
 
@@ -23,6 +24,7 @@
 - [x] **SM-SA-002**: If the skill directory does not exist, the system shall exit with error code 1.
 - [x] **SM-SA-003**: If the skill is already in `.archive/`, the system shall exit with error code 1.
 - [x] **SM-SA-004**: The system shall update the skill's state to "archived" with the current date as archived_at in `.usage.json`.
+- [ ] **SM-SA-005**: The system shall remove the symlink from `~/.agents/skills/{slug}` when archiving a skill.
 
 ## Skill Listing
 

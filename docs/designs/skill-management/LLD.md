@@ -5,11 +5,29 @@
 
 ## Overview
 
-Skill management covers the creation, patching, archival, usage tracking, and lifecycle transitions of agent-created skills stored in `~/.autolearn/skills/`. Skills are markdown files (SKILL.md) that the autolearn-reviewer agent creates when it identifies repeatable patterns in conversations.
+Skill management covers the creation, patching, archival, usage tracking, and lifecycle transitions of agent-created skills stored in `~/.autolearn/skills/`. Skills are markdown files (SKILL.md) that the autolearn-reviewer agent creates when it identifies repeatable patterns in conversations. Created skills are symlinked into `~/.agents/skills/` so OpenCode auto-discovers them.
 
 ## Context
 
 Per the HLD, skills live in `~/.autolearn/skills/` as directories containing a `SKILL.md` file. The curator automates lifecycle transitions (active → stale → archived). Only autolearn-created skills are managed by the curator — user-installed or bundled skills are never touched.
+
+### Symlink Pattern
+
+When a skill is created, a symlink is placed at `~/.agents/skills/{slug}` pointing to the real directory at `~/.autolearn/skills/{slug}`. This makes the skill visible to OpenCode's skill discovery without mixing autolearn's tracking data with user-installed skills.
+
+When a skill is archived, the symlink is removed (but the real directory is preserved in `~/.autolearn/skills/.archive/`).
+
+```
+~/.agents/skills/
+├── autolearn-reviewer/          # user-installed skill
+├── my-learned-skill → ~/.autolearn/skills/my-learned-skill/  # symlink
+└── ...
+
+~/.autolearn/skills/
+├── my-learned-skill/
+│   └── SKILL.md                 # actual skill content
+└── .usage.json                  # autolearn tracking
+```
 
 ## Data Models
 
