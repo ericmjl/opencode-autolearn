@@ -126,6 +126,10 @@ export const AutolearnPlugin = async (ctx) => {
   // @spec CM-GUARD-002
   const isPrimary = !globalThis[GUARD]
   if (isPrimary) globalThis[GUARD] = true
+  if (!isPrimary) {
+    dbg("SKIPPING: secondary plugin instance, guard already set")
+    return {}
+  }
 
   dbg("PLUGIN LOADED", { isPrimary, hasClient: !!client, hasSession: !!(client?.session), directory })
 

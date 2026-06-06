@@ -100,7 +100,7 @@ def _save_curator_state(state: dict):
 
 def _slugify(text: str) -> str:
     text = text.lower().strip()
-    text = re.sub(r"[^a-z0-9\s-]", "", text)
+    text = re.sub(r"[^a-z0-9\s-]", "-", text)
     text = re.sub(r"[\s]+", "-", text)
     text = re.sub(r"-+", "-", text)
     return text[:60].rstrip("-")
@@ -226,7 +226,7 @@ def cmd_user_remove(args):
     before = len(entries)
     entries = [e for e in entries if keyword not in e.lower()]
     _write_md(USER_FILE, _entries_to_md(entries, "User Profile"))
-    print(f"Removed {before - len(entries)} entries")
+    print(f"Removed {before - len(entries)} entries ({len(entries)} remaining)")
 
 
 # @spec KS-MEM-013
