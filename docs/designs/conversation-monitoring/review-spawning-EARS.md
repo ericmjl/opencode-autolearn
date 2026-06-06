@@ -41,6 +41,13 @@
 
 - [x] **CM-RS-015**: The system shall trim `~/.autolearn/observations.jsonl` to a maximum of 1000 lines, discarding the oldest entries.
 
+## Exit Review
+
+- [ ] **CM-RS-016**: When the OpenCode process is about to exit (beforeExit event), the system shall spawn a final review if the buffer contains more than 2 messages.
+- [ ] **CM-RS-017**: When the process receives SIGINT or SIGTERM, the system shall spawn a final review if the buffer contains more than 2 messages.
+- [ ] **CM-RS-018**: The exit review shall use a synchronous spawn (write file + detached subprocess) to ensure the review is dispatched before the process terminates.
+- [ ] **CM-RS-019**: The exit review shall not block or delay process shutdown.
+
 ## Related Documents
 
 - [Conversation Monitoring LLD](./LLD.md)

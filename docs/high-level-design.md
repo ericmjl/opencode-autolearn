@@ -143,8 +143,8 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 
 | Feature | Description | Components |
 |---------|-------------|------------|
-| Conversation Monitoring | Count turns, buffer messages, detect idle | autolearn.js |
-| Review Spawning | Format and dispatch reviews at thresholds | autolearn.js |
+| Conversation Monitoring | Count turns, buffer messages, detect idle, exit review | autolearn.js |
+| Review Spawning | Format and dispatch reviews at thresholds and on exit | autolearn.js |
 | Knowledge Store | Memory, user profile, observations CRUD | autolearn.py |
 | Skill Management | Create, patch, archive, usage tracking | autolearn.py |
 | Skill Lifecycle | Auto-transition stale/archived, curator | autolearn.py |
@@ -155,6 +155,7 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 | Risk | Mitigation |
 |------|------------|
 | Review spawning loops | `AUTOLEARN_REVIEWER=1` guard prevents recursive spawning; buffer depth check skips reviews containing review content |
+| Lost conversation on exit | Process-level `beforeExit` and signal handlers dispatch a final review before shutdown |
 | Memory bloat | 3000-char cap on memory.md, automatic trimming of oldest entries |
 | Stale review files | Auto-cleanup based on `stale_after_days` config |
 | Secret leakage | Regex redaction of API keys, tokens, passwords from buffered messages |

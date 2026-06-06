@@ -37,6 +37,13 @@ session.idle ──→ buffer.length > 2 AND cooldown elapsed?
                 ┌─────▼──────┐
                 │ spawnReview│
                 └────────────┘
+
+process.beforeExit / SIGINT / SIGTERM ──→ buffer.length > 2?
+                                                │
+                                          ┌─────▼──────┐
+                                          │ spawnExit  │
+                                          │ Review     │
+                                          └────────────┘
 ```
 
 ## Data Structures
@@ -127,6 +134,32 @@ Appended to `~/.autolearn/observations.jsonl`:
 ```
 
 Trimmed to 1000 lines max (oldest entries dropped).
+
+## Exit Review
+
+OpenCode does not emit a `session.ended` event. To ensure buffered conversation is reviewed even when the session ends without hitting the turn threshold, the plugin registers process-level exit handlers.
+
+### Triggers
+
+| Trigger | Event | Async-safe? |
+|---------|-------|-------------|
+| Graceful exit | `process.on('beforeExit')` | Yes |
+| Ctrl+C | `process.on('SIGINT')` | No — must be sync |
+| Kill signal | `process.on('SIGTERM')` | No — must be sync |
+
+### Exit Review Flow
+
+1. Check `buffer.length > 2` (same minimum as idle review)
+2. Format review markdown
+3. Write to `~/.autolearn/reviews/review-exit-{timestamp}.md` (synchronous)
+4. Spawn `opencode run` with `detached: true` (fire-and-forget)
+5. For signal handlers, call `process.exit()` after spawn to ensure shutdown
+
+The key constraint: signal handlers must be synchronous. `Bun.spawn` with `detached: true` returns immediately and the child process survives parent exit, so this is safe.
+
+### Guard
+
+Exit handlers are only registered in the primary (non-reviewer) plugin instance. The `AUTOLEARN_REVIEWER=1` check runs before handler registration.
 
 ## Edge Cases
 

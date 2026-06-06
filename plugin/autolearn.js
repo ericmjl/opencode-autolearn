@@ -229,7 +229,8 @@ export const AutolearnPlugin = async (ctx) => {
     md += "## Context\n\n"
     md += `- Project: ${projectName()}\n`
     md += `- Date: ${new Date().toISOString()}\n`
-    md += `- Turns in this review: ${messages.length}\n\n`
+    md += `- Turns in this review: ${messages.length}\n`
+    md += `- Trigger: exit\n\n`
     md += "## Instructions\n\n"
     md += 'Review the conversation below for learning opportunities.\nLoad the autolearn-reviewer skill with: skill({ name: "autolearn-reviewer" })\n\n'
     md += "Focus on:\n\n"
@@ -247,6 +248,55 @@ export const AutolearnPlugin = async (ctx) => {
 
     md += "---\n\nTake action now.\n"
     return md
+  }
+
+  // @spec CM-RS-016, CM-RS-017, CM-RS-018, CM-RS-019
+  function spawnExitReview() {
+    if (buffer.length <= 2) return
+    const reviewText = buffer.map(m => m.content).join(" ")
+    if (reviewText.includes(REVIEW_HEADING)) return
+
+    const captured = [...buffer]
+    buffer = []
+
+    try {
+      const reviewMd = formatReview(captured)
+      const reviewFile = join(REVIEWS_DIR, `review-exit-${Date.now()}.md`)
+      writeFileSync(reviewFile, reviewMd)
+
+      const args = ["run", reviewMd, "--agent", "autolearn-reviewer", "--title", "autolearn exit review"]
+      Bun.spawn(["opencode", ...args], {
+        stdout: "ignore",
+        stderr: "ignore",
+        detached: true,
+        cwd: directory || worktree || process.cwd(),
+        env: { ...process.env, AUTOLEARN_REVIEWER: "1" },
+      })
+
+      dbg("EXIT REVIEW SPAWNED", captured.length, "messages")
+    } catch (err) {
+      dbg("EXIT REVIEW FAILED", err.message)
+    }
+  }
+
+  // @spec CM-RS-016
+  process.on("beforeExit", () => {
+    dbg("beforeExit — spawning exit review")
+    spawnExitReview()
+  })
+
+  // @spec CM-RS-017
+  let exitHandlersInstalled = false
+  if (!exitHandlersInstalled) {
+    exitHandlersInstalled = true
+    const signals = ["SIGINT", "SIGTERM"]
+    for (const sig of signals) {
+      process.on(sig, () => {
+        dbg(`${sig} received — spawning exit review`)
+        spawnExitReview()
+        process.exit(0)
+      })
+    }
   }
 
   const MAX_OBS_LINES = 1000
