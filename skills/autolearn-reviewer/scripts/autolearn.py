@@ -12,7 +12,7 @@ Commands:
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pyyaml"]
+# dependencies = ["pyyaml", "python-slugify"]
 # ///
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 import yaml
+from slugify import slugify as python_slugify
 
 # @spec KS-MEM-020
 DATA_HOME = Path(os.environ.get("AUTOLEARN_HOME", Path.home() / ".autolearn"))
@@ -99,11 +100,7 @@ def _save_curator_state(state: dict):
 
 
 def _slugify(text: str) -> str:
-    text = text.lower().strip()
-    text = re.sub(r"[^a-z0-9\s-]", "-", text)
-    text = re.sub(r"[\s]+", "-", text)
-    text = re.sub(r"-+", "-", text)
-    return text[:60].rstrip("-")
+    return python_slugify(text, max_length=60)
 
 
 # @spec KS-MEM-015, KS-MEM-016, KS-MEM-017
