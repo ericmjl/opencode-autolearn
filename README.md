@@ -28,32 +28,44 @@ OpenCode session
 
 ## Install
 
-### 1. Clone and copy the plugin
+### One-liner (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ericmjl/opencode-autolearn/main/install.sh | bash
+```
+
+This copies the plugin, installs the skills, patches your `opencode.json`, and initializes the store.
+
+### Manual install
 
 ```bash
 git clone https://github.com/ericmjl/opencode-autolearn.git
-cp opencode-autolearn/plugin/autolearn.js ~/.config/opencode/plugins/
+bash opencode-autolearn/install.sh
 ```
 
-### 2. Install the skills
+### What the installer does
+
+1. Copies `plugin/autolearn.js` to `~/.config/opencode/plugins/`
+2. Copies `skills/autolearn-reviewer` and `skills/autolearn-curator` to `~/.agents/skills/`
+3. Patches `~/.config/opencode/opencode.json` to register the plugin, instructions, and reviewer agent
+4. Runs `autolearn.py init` to create `~/.autolearn/` with defaults
+
+### Verify
+
+After installing, restart OpenCode. The plugin activates automatically. You can confirm by running:
 
 ```bash
-cp -r opencode-autolearn/skills/autolearn-reviewer ~/.agents/skills/
-cp -r opencode-autolearn/skills/autolearn-curator ~/.agents/skills/
+uv run ~/.agents/skills/autolearn-reviewer/scripts/autolearn.py memory list
 ```
 
-### 3. Register the plugin and reviewer agent
+### Manual opencode.json config
 
-Add to your `~/.config/opencode/opencode.json`:
+If you prefer to edit `~/.config/opencode/opencode.json` yourself, the installer adds:
 
 ```json
 {
-  "plugin": [
-    "./plugins/autolearn.js"
-  ],
-  "instructions": [
-    "~/.autolearn/memory.md"
-  ],
+  "plugin": ["./plugins/autolearn.js"],
+  "instructions": ["~/.autolearn/memory.md"],
   "agent": {
     "autolearn-reviewer": {
       "description": "Reviews past conversations for self-improvement opportunities",
@@ -61,29 +73,14 @@ Add to your `~/.config/opencode/opencode.json`:
       "steps": 20,
       "prompt": "Load the autolearn-reviewer skill and follow its instructions to review the attached conversation for learning opportunities. Take immediate action: record observations, update memory, create or patch skills.",
       "permission": {
-        "bash": "allow",
-        "read": "allow",
-        "glob": "allow",
-        "grep": "allow",
-        "write": "allow",
-        "edit": "deny",
-        "webfetch": "deny",
-        "task": "deny",
-        "skill": "allow",
-        "external_directory": "allow"
+        "bash": "allow", "read": "allow", "glob": "allow", "grep": "allow",
+        "write": "allow", "edit": "deny", "webfetch": "deny", "task": "deny",
+        "skill": "allow", "external_directory": "allow"
       }
     }
   }
 }
 ```
-
-### 4. Initialize the store
-
-```bash
-uv run ~/.agents/skills/autolearn-reviewer/scripts/autolearn.py init
-```
-
-This creates `~/.autolearn/` with defaults. You're done — the plugin will activate on your next OpenCode session.
 
 ## Dependencies
 
