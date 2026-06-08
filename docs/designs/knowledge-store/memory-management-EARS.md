@@ -43,6 +43,15 @@
 
 - [x] **KS-MEM-020**: The system shall use the `AUTOLEARN_HOME` environment variable as the data directory if set, defaulting to `~/.autolearn/`.
 
+## Reinforcement (Agent-Driven Semantic Dedup)
+
+- [x] **KS-MEM-021**: The `memory strengths` command shall print all tracked entries sorted by strength (highest first), showing count, first_seen, last_seen, and a text snippet.
+- [x] **KS-MEM-022**: The reviewer agent shall check existing memories via `memory list` before adding new entries, and use `memory strengthen <keyword>` when a new observation is semantically the same as an existing entry.
+- [x] **KS-MEM-023**: When `memory strengthen <keyword>` is invoked and exactly one entry matches, the system shall increment the strength counter for that entry in `strengths.json`.
+- [x] **KS-MEM-024**: When `memory weaken <keyword>` is invoked and exactly one entry matches, the system shall decrement the strength counter, removing the record if count drops to 0.
+- [x] **KS-MEM-025**: When `memory remove` removes entries, the system shall also remove the corresponding strength records from `strengths.json`.
+- [x] **KS-MEM-026**: The curator shall report entries with strength >= `escalation_threshold` (default 3) as escalation candidates, suitable for promotion to AGENTS.md.
+
 ## Related Documents
 
 - [Knowledge Store LLD](./LLD.md)

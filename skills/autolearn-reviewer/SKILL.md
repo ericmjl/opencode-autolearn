@@ -84,7 +84,21 @@ search-patterns, or a project-specific domain.
 
 ### Step 3: Update memory
 
-For lessons learned that are broadly applicable, add to memory:
+**Before adding anything, check for semantic duplicates.** Run:
+
+```bash
+uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py memory list
+```
+
+Read the existing entries. If the new lesson is semantically the same as an
+existing entry (same concept, different wording), **strengthen** it instead of
+adding a duplicate:
+
+```bash
+uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py memory strengthen "<keyword from existing entry>"
+```
+
+Only add a new entry if the lesson is genuinely novel:
 
 ```bash
 uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py memory add "<lesson>"

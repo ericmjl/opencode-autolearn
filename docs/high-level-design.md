@@ -127,6 +127,7 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 ├── memory.md                # Persistent lessons loaded into every session
 ├── user-profile.md          # User preferences and habits
 ├── observations.jsonl       # Event log (append-only, trimmed to 1000 lines)
+├── strengths.json           # Reinforcement counters per memory entry
 ├── reviews/                 # Generated review markdown files
 │   └── review-{timestamp}.md
 ├── skills/                  # Agent-created skills
@@ -145,9 +146,9 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 |---------|-------------|------------|
 | Conversation Monitoring | Count turns, buffer messages, detect idle, exit review | autolearn.js |
 | Review Spawning | Format and dispatch reviews at thresholds and on exit | autolearn.js |
-| Knowledge Store | Memory, user profile, observations CRUD | autolearn.py |
+| Knowledge Store | Memory, user profile, observations, reinforcement tracking | autolearn.py |
 | Skill Management | Create, patch, archive, usage tracking | autolearn.py |
-| Skill Lifecycle | Auto-transition stale/archived, curator | autolearn.py |
+| Skill Lifecycle | Auto-transition stale/archived, curator with escalation | autolearn.py |
 | Review Agent | Examine conversations, extract learnings | autolearn-reviewer SKILL.md |
 
 ## Risks and Mitigations

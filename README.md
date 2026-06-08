@@ -99,6 +99,7 @@ max_conversation_buffer: 50   # max messages in buffer
 curator_interval_days: 7      # how often to run curator
 stale_after_days: 30          # days before skill → stale
 archive_after_days: 90        # days before skill → archived
+escalation_threshold: 3       # reinforcement count before curator suggests promotion to AGENTS.md
 ```
 
 ## CLI reference
@@ -110,6 +111,9 @@ uv run ~/.agents/skills/autolearn-reviewer/scripts/autolearn.py init
 # Memory (loaded into every session)
 uv run ... autolearn.py memory add "Use uv tool for Python CLI tools, never pip3 install"
 uv run ... autolearn.py memory list
+uv run ... autolearn.py memory strengths
+uv run ... autolearn.py memory strengthen <keyword>
+uv run ... autolearn.py memory weaken <keyword>
 uv run ... autolearn.py memory remove <keyword>
 
 # User profile (communication/workflow preferences)
@@ -137,6 +141,7 @@ uv run ... autolearn.py curator status
 ├── memory.md                # persistent lessons (loaded into every session)
 ├── user-profile.md          # user preferences
 ├── observations.jsonl       # event log (auto-trimmed to 1000 lines)
+├── strengths.json           # reinforcement counters per memory entry
 ├── reviews/                 # generated review markdown files
 │   └── review-{timestamp}.md
 ├── skills/                  # agent-created skills (real location)

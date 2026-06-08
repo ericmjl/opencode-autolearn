@@ -1,13 +1,12 @@
 """Autolearn CLI - manages ~/.autolearn/ store for self-improvement.
 
 Commands:
-  memory add/remove/list   Manage persistent memory
-  user add/remove/list     Manage user profile
-  skill create/patch/archive/list  Manage agent-created skills
-  skill usage              Show skill usage telemetry
-  curator run              Run skill consolidation and cleanup
-  curator status           Show curator state
-  init                     Initialize the autolearn store
+  memory add/remove/list/strengths   Manage persistent memory
+  user add/remove/list               Manage user profile
+  skill create/patch/archive/list    Manage agent-created skills
+  skill usage                        Show skill usage telemetry
+  curator run/status                 Run skill consolidation and cleanup
+  init                               Initialize the autolearn store
 """
 
 # /// script
@@ -19,7 +18,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -37,6 +35,7 @@ ARCHIVE_DIR = SKILLS_DIR / ".archive"
 USAGE_FILE = SKILLS_DIR / ".usage.json"
 CURATOR_STATE_FILE = DATA_HOME / ".curator_state.json"
 OBSERVATIONS_FILE = DATA_HOME / "observations.jsonl"
+STRENGTHS_FILE = DATA_HOME / "strengths.json"
 AGENTS_SKILLS_DIR = Path(os.environ.get("AGENTS_SKILLS_DIR", Path.home() / ".agents" / "skills"))
 
 MAX_MEMORY_CHARS = 3000
@@ -104,6 +103,20 @@ def _slugify(text: str) -> str:
     return python_slugify(text, max_length=60)
 
 
+def _load_strengths() -> dict:
+    if STRENGTHS_FILE.exists():
+        try:
+            return json.loads(STRENGTHS_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_strengths(data: dict):
+    _ensure_dirs()
+    STRENGTHS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
 # @spec KS-MEM-015, KS-MEM-016, KS-MEM-017
 def _extract_entries(md: str) -> list[str]:
     entries = []
@@ -168,7 +181,7 @@ def cmd_init(args):
     if not USER_FILE.exists():
         _write_md(USER_FILE, "# User Profile\n\n<!-- Managed by autolearn. -->\n\n")
     if not CONFIG_FILE.exists():
-        _write_md(CONFIG_FILE, "review_threshold: 10\nsession_review_on_idle: true\nmax_conversation_buffer: 50\ncurator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\n")
+        _write_md(CONFIG_FILE, "review_threshold: 10\nsession_review_on_idle: true\nmax_conversation_buffer: 50\ncurator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\nescalation_threshold: 3\n")
     print(f"Initialized autolearn store at {DATA_HOME}")
 
 
@@ -189,8 +202,14 @@ def cmd_memory_remove(args):
     entries = _extract_entries(_read_md(MEMORY_FILE))
     keyword = args.keyword.lower()
     before = len(entries)
+    removed_entries = [e for e in entries if keyword in e.lower()]
     entries = [e for e in entries if keyword not in e.lower()]
     removed = before - len(entries)
+    strengths = _load_strengths()
+    for e in removed_entries:
+        key = _slugify(e.lower().strip())
+        strengths.pop(key, None)
+    _save_strengths(strengths)
     _write_md(MEMORY_FILE, _entries_to_md(entries, "Autolearn Memory"))
     print(f"Removed {removed} entries ({len(entries)} remaining)")
 
@@ -204,6 +223,83 @@ def cmd_memory_list(args):
     for i, entry in enumerate(entries, 1):
         print(f"  {i}. {entry}")
     print(f"\nTotal: {len(entries)} entries, {_total_chars(entries)} chars")
+
+
+# @spec KS-MEM-021, KS-MEM-022
+def cmd_memory_strengths(args):
+    strengths = _load_strengths()
+    if not strengths:
+        print("No reinforcement data yet.")
+        return
+    entries = _extract_entries(_read_md(MEMORY_FILE))
+    entry_map = {_slugify(e.lower().strip()): e for e in entries}
+    sorted_strengths = sorted(strengths.items(), key=lambda x: x[1]["count"], reverse=True)
+    for key, meta in sorted_strengths:
+        snippet = entry_map.get(key, key)
+        if len(snippet) > 80:
+            snippet = snippet[:77] + "..."
+        count = meta["count"]
+        first = meta.get("first_seen", "?")
+        last = meta.get("last_seen", "?")
+        print(f"  [{count}x] {snippet}  (first: {first}, last: {last})")
+    total = sum(m["count"] for m in strengths.values())
+    reinforced = sum(1 for m in strengths.values() if m["count"] > 1)
+    print(f"\nTotal: {len(strengths)} entries tracked, {reinforced} reinforced, {total} total observations")
+
+
+# @spec KS-MEM-026
+def cmd_memory_strengthen(args):
+    entries = _extract_entries(_read_md(MEMORY_FILE))
+    keyword = args.keyword.lower()
+    matches = [(i, e) for i, e in enumerate(entries, 1) if keyword in e.lower()]
+    if not matches:
+        print(f"No memory entries matching '{args.keyword}'.")
+        sys.exit(1)
+    if len(matches) > 1:
+        print(f"Multiple entries match '{args.keyword}', please be more specific:")
+        for i, e in matches:
+            print(f"  {i}. {e[:100]}")
+        sys.exit(1)
+    entry = matches[0][1]
+    key = _slugify(entry.lower().strip())
+    strengths = _load_strengths()
+    now = date.today().isoformat()
+    if key in strengths:
+        strengths[key]["count"] += 1
+        strengths[key]["last_seen"] = now
+    else:
+        strengths[key] = {"count": 2, "first_seen": now, "last_seen": now}
+    _save_strengths(strengths)
+    print(f"Strengthened: [{strengths[key]['count']}x] {entry[:80]}")
+
+
+# @spec KS-MEM-027
+def cmd_memory_weaken(args):
+    entries = _extract_entries(_read_md(MEMORY_FILE))
+    keyword = args.keyword.lower()
+    matches = [(i, e) for i, e in enumerate(entries, 1) if keyword in e.lower()]
+    if not matches:
+        print(f"No memory entries matching '{args.keyword}'.")
+        sys.exit(1)
+    if len(matches) > 1:
+        print(f"Multiple entries match '{args.keyword}', please be more specific:")
+        for i, e in matches:
+            print(f"  {i}. {e[:100]}")
+        sys.exit(1)
+    entry = matches[0][1]
+    key = _slugify(entry.lower().strip())
+    strengths = _load_strengths()
+    if key in strengths:
+        strengths[key]["count"] = max(1, strengths[key]["count"] - 1)
+        if strengths[key]["count"] == 1:
+            del strengths[key]
+        _save_strengths(strengths)
+        if key in strengths:
+            print(f"Weakened: [{strengths[key]['count']}x] {entry[:80]}")
+        else:
+            print(f"Weakened: removed strength record for '{entry[:60]}'")
+    else:
+        print(f"No strength record for that entry.")
 
 
 # @spec KS-MEM-004, KS-MEM-005, KS-MEM-007
@@ -400,6 +496,7 @@ def cmd_curator_run(args):
     config = _load_config()
     stale_days = config.get("stale_after_days", 30)
     archive_days = config.get("archive_after_days", 90)
+    escalation_threshold = config.get("escalation_threshold", 3)
     today = date.today()
 
     usage = _load_usage()
@@ -440,22 +537,39 @@ def cmd_curator_run(args):
 
     _save_usage(usage)
 
+    escalation_candidates = []
+    strengths = _load_strengths()
+    entries = _extract_entries(_read_md(MEMORY_FILE))
+    entry_map = {_slugify(e.lower().strip()): e for e in entries}
+    for key, meta in strengths.items():
+        if meta["count"] >= escalation_threshold:
+            snippet = entry_map.get(key, key)
+            escalation_candidates.append((snippet, meta["count"]))
+
     run_record = {
         "date": today.isoformat(),
         "transitions": transitions,
+        "escalation_candidates": [
+            {"entry": e, "strength": s} for e, s in escalation_candidates
+        ],
     }
     state["last_run"] = today.isoformat()
     state["runs"].append(run_record)
     _save_curator_state(state)
 
-    total = sum(len(v) for v in transitions.values())
-    if total == 0:
-        print("Curator run complete: no transitions needed.")
+    total_transitions = sum(len(v) for v in transitions.values())
+    if total_transitions == 0 and not escalation_candidates:
+        print("Curator run complete: no transitions needed, no escalation candidates.")
     else:
-        print(f"Curator run complete:")
+        print("Curator run complete:")
         for action, names in transitions.items():
             if names:
                 print(f"  {action}: {', '.join(names)}")
+        if escalation_candidates:
+            print(f"  escalation candidates (strength >= {escalation_threshold}):")
+            for snippet, count in sorted(escalation_candidates, key=lambda x: -x[1]):
+                display = snippet[:80] + "..." if len(snippet) > 80 else snippet
+                print(f"    [{count}x] {display}")
 
 
 # @spec SM-LC-010
@@ -488,6 +602,11 @@ def main():
     mem_rm = mem_sub.add_parser("remove", help="Remove entries matching keyword")
     mem_rm.add_argument("keyword", help="Keyword to match")
     mem_sub.add_parser("list", help="List all memory entries")
+    mem_sub.add_parser("strengths", help="Show reinforcement statistics")
+    mem_strength = mem_sub.add_parser("strengthen", help="Reinforce an existing memory (agent semantic dedup)")
+    mem_strength.add_argument("keyword", help="Keyword matching the entry to strengthen")
+    mem_weaken = mem_sub.add_parser("weaken", help="Reduce reinforcement on a memory")
+    mem_weaken.add_argument("keyword", help="Keyword matching the entry to weaken")
 
     usr = sub.add_parser("user", help="Manage user profile")
     usr_sub = usr.add_subparsers(dest="subcommand")
@@ -527,6 +646,9 @@ def main():
             "add": cmd_memory_add,
             "remove": cmd_memory_remove,
             "list": cmd_memory_list,
+            "strengths": cmd_memory_strengths,
+            "strengthen": cmd_memory_strengthen,
+            "weaken": cmd_memory_weaken,
         },
         "user": {
             "add": cmd_user_add,

@@ -29,7 +29,8 @@ Markdown file with bullet-list entries, loaded into every agent session via `ope
 | Constraint | Value |
 |-----------|-------|
 | Max total characters | 3000 |
-| Deduplication | Case-insensitive exact match on normalized text |
+| Deduplication | Case-insensitive exact match on normalized text (safety net) |
+| Reinforcement | Agent-driven: reviewer calls `memory strengthen` for semantic duplicates |
 | Trimming | Oldest entries dropped when over cap |
 
 ### User Profile (`user-profile.md`)
@@ -69,7 +70,28 @@ max_conversation_buffer: 50
 curator_interval_days: 7
 stale_after_days: 30
 archive_after_days: 90
+escalation_threshold: 3
 ```
+
+### Reinforcement Strengths (`strengths.json`)
+
+JSON dict mapping slugified entry text to reinforcement metadata.
+
+```json
+{
+  "always-use-uv-for-python": {
+    "count": 3,
+    "first_seen": "2026-06-07",
+    "last_seen": "2026-06-07"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| count | int | Number of times this entry was observed (1 = first, 2+ = reinforced) |
+| first_seen | string | ISO date when first observed |
+| last_seen | string | ISO date when last reinforced |
 
 ## CLI Commands (autolearn.py)
 
@@ -80,6 +102,9 @@ archive_after_days: 90
 | `memory add <content>` | Append entry, deduplicate, trim to 3000 chars |
 | `memory remove <keyword>` | Remove entries containing keyword (case-insensitive) |
 | `memory list` | Print numbered list of entries with char count |
+| `memory strengths` | Show reinforcement statistics sorted by strength |
+| `memory strengthen <keyword>` | Increment strength on matching entry (agent semantic dedup) |
+| `memory weaken <keyword>` | Decrement strength on matching entry |
 
 ### User Profile Management
 
@@ -115,7 +140,13 @@ archive_after_days: 90
 
 ## Deduplication
 
-`_dedup(entries)` normalizes each entry (lowercase, strip) and keeps only the first occurrence. Later duplicates are silently dropped.
+`_dedup(entries)` normalizes each entry (lowercase, strip) and keeps only the first occurrence by exact match. This is a safety net only — the primary semantic dedup is agent-driven.
+
+## Reinforcement (Agent-Driven Semantic Dedup)
+
+The reviewer agent reads `memory list`, judges whether a new observation is semantically the same as an existing entry, and calls `memory strengthen <keyword>` to increment the strength counter in `strengths.json`. This keeps the semantic judgment in the agent (which understands meaning) rather than relying on string similarity heuristics.
+
+The curator reads `strengths.json` and reports entries exceeding `escalation_threshold` (default 3) as candidates for promotion to AGENTS.md.
 
 ## Trimming
 
