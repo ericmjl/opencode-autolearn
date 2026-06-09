@@ -6,6 +6,7 @@ Commands:
   skill create/patch/archive/list    Manage agent-created skills
   skill usage                        Show skill usage telemetry
   curator run/status                 Run skill consolidation and cleanup
+  search init/query/sessions/status  FTS5 full-text search over past sessions
   init                               Initialize the autolearn store
 """
 
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -40,6 +42,9 @@ AGENTS_SKILLS_DIR = Path(os.environ.get("AGENTS_SKILLS_DIR", Path.home() / ".age
 
 MAX_MEMORY_CHARS = 3000
 MAX_USER_CHARS = 2000
+
+OPENCODE_DB = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+SEARCH_DB = DATA_HOME / "search.db"
 
 
 # @spec KS-MEM-001
@@ -586,6 +591,344 @@ def cmd_curator_status(args):
     print(f"Total runs: {len(state.get('runs', []))}")
 
 
+def _get_search_conn() -> sqlite3.Connection:
+    _ensure_dirs()
+    conn = sqlite3.connect(str(SEARCH_DB))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def _init_search_schema(conn: sqlite3.Connection):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS index_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS session_text_content(
+            rowid INTEGER PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            text TEXT NOT NULL,
+            project TEXT NOT NULL DEFAULT '',
+            timestamp INTEGER NOT NULL
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS session_text USING fts5(
+            session_id,
+            message_id,
+            role,
+            text,
+            project,
+            timestamp,
+            content=session_text_content,
+            content_rowid=rowid
+        );
+        CREATE TABLE IF NOT EXISTS indexed_session(
+            session_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL DEFAULT '',
+            project TEXT NOT NULL DEFAULT '',
+            message_count INTEGER NOT NULL DEFAULT 0,
+            time_created INTEGER NOT NULL,
+            time_indexed INTEGER NOT NULL
+        );
+    """)
+
+
+def _get_opencode_conn() -> sqlite3.Connection | None:
+    if not OPENCODE_DB.exists():
+        return None
+    conn = sqlite3.connect(f"file:{OPENCODE_DB}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _iso_from_unix_ms(unix_ms: int) -> str:
+    dt = datetime.fromtimestamp(unix_ms / 1000)
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def cmd_search_init(args):
+    full = getattr(args, "full", False)
+    db_conn = _get_opencode_conn()
+    if not db_conn:
+        print(f"OpenCode database not found at {OPENCODE_DB}")
+        sys.exit(1)
+
+    sconn = _get_search_conn()
+    _init_search_schema(sconn)
+
+    if full:
+        sconn.execute("DELETE FROM session_text_content")
+        sconn.execute("DELETE FROM indexed_session")
+        sconn.execute("DELETE FROM index_state WHERE key = 'last_part_time'")
+        sconn.commit()
+        print("Cleared existing index for full rebuild...")
+
+    last_mark_row = sconn.execute(
+        "SELECT value FROM index_state WHERE key = 'last_part_time'"
+    ).fetchone()
+    last_mark = int(last_mark_row["value"]) if last_mark_row else 0
+
+    session_cache: dict[str, dict] = {}
+
+    def _get_session(session_id: str) -> dict:
+        if session_id in session_cache:
+            return session_cache[session_id]
+        row = db_conn.execute(
+            "SELECT id, title, project_id, time_created FROM session WHERE id = ?",
+            [session_id],
+        ).fetchone()
+        if row:
+            project_row = db_conn.execute(
+                "SELECT name FROM project WHERE id = ?", [row["project_id"]]
+            ).fetchone()
+            info = {
+                "title": row["title"] or "Untitled",
+                "project": (project_row["name"] or "") if project_row else "",
+                "time_created": row["time_created"],
+            }
+        else:
+            info = {"title": "Untitled", "project": "", "time_created": 0}
+        session_cache[session_id] = info
+        return info
+
+    rows = db_conn.execute(
+        """
+        SELECT p.id AS part_id, p.message_id, p.session_id,
+               p.time_created, p.data AS part_data, m.data AS msg_data
+        FROM part p
+        JOIN message m ON m.id = p.message_id
+        WHERE p.time_created > ?
+        ORDER BY p.time_created ASC
+        """,
+        [last_mark],
+    ).fetchall()
+
+    count = 0
+    max_time = last_mark
+    for row in rows:
+        try:
+            pdata = json.loads(row["part_data"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if pdata.get("type") != "text":
+            continue
+        text = pdata.get("text", "")
+        if not text or not text.strip():
+            continue
+
+        try:
+            mdata = json.loads(row["msg_data"])
+        except (json.JSONDecodeError, TypeError):
+            mdata = {}
+        role = mdata.get("role", "unknown")
+
+        session_id = row["session_id"]
+        session = _get_session(session_id)
+
+        sconn.execute(
+            "INSERT INTO session_text_content (session_id, message_id, role, text, project, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            [session_id, row["message_id"], role, text, session.get("project", "") or "", row["time_created"]],
+        )
+
+        sconn.execute(
+            "INSERT OR REPLACE INTO indexed_session (session_id, title, project, message_count, time_created, time_indexed) VALUES (?, ?, ?, COALESCE((SELECT message_count FROM indexed_session WHERE session_id = ?), 0) + 1, ?, ?)",
+            [session_id, session["title"], session["project"], session_id, session["time_created"], int(datetime.now().timestamp() * 1000)],
+        )
+
+        if row["time_created"] > max_time:
+            max_time = row["time_created"]
+        count += 1
+
+    if max_time > last_mark:
+        sconn.execute(
+            "INSERT OR REPLACE INTO index_state (key, value) VALUES ('last_part_time', ?)",
+            [str(max_time)],
+        )
+
+    sconn.execute("INSERT INTO session_text(session_text) VALUES ('rebuild')")
+    sconn.commit()
+    sconn.close()
+    db_conn.close()
+
+    if count == 0:
+        print("Index is up to date. No new messages to index.")
+    else:
+        print(f"Indexed {count} new text parts (up to {_iso_from_unix_ms(max_time)})")
+
+
+def cmd_search_query(args):
+    sconn = _get_search_conn()
+    _init_search_schema(sconn)
+
+    terms = args.terms
+    limit = getattr(args, "limit", 5) or 5
+    context_size = getattr(args, "context", 2) or 2
+    session_filter = getattr(args, "session", None)
+    project_filter = getattr(args, "project", None)
+
+    query_parts = []
+    for word in terms.split():
+        if word.isupper() or word.startswith('"') or word.startswith("("):
+            query_parts.append(word)
+        else:
+            query_parts.append(f"{word}*")
+    fts_query = " ".join(query_parts)
+
+    where_clauses = []
+    params: list[str] = []
+    if session_filter:
+        where_clauses.append("session_id = ?")
+        params.append(session_filter)
+    if project_filter:
+        where_clauses.append("project = ?")
+        params.append(project_filter)
+
+    where_sql = ""
+    if where_clauses:
+        where_sql = " AND " + " AND ".join(where_clauses)
+
+    try:
+        hits = sconn.execute(
+            f"""
+            SELECT rowid, session_id, message_id, role, text, project, timestamp, rank
+            FROM session_text
+            WHERE session_text MATCH ?{where_sql}
+            ORDER BY rank
+            LIMIT ?
+            """,
+            [fts_query] + params + [limit],
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        print(f"Search error: {e}")
+        sconn.close()
+        sys.exit(1)
+
+    if not hits:
+        print(f"No results for: {terms}")
+        sconn.close()
+        return
+
+    session_ids = list({h["session_id"] for h in hits})
+    sessions_info = {}
+    for sid in session_ids:
+        row = sconn.execute(
+            "SELECT title, project FROM indexed_session WHERE session_id = ?", [sid]
+        ).fetchone()
+        if row:
+            sessions_info[sid] = {"title": row["title"], "project": row["project"]}
+
+    print(f'## Search Results: "{terms}"\n')
+
+    seen_sessions: set[str] = set()
+    for hit in hits:
+        sid = hit["session_id"]
+        ts = hit["timestamp"]
+        role = hit["role"]
+        text = hit["text"]
+        rank = hit["rank"]
+        info = sessions_info.get(sid, {"title": "Untitled", "project": ""})
+
+        if sid not in seen_sessions:
+            seen_sessions.add(sid)
+            print(f'### Session: {info["title"]} ({sid}) — {_iso_from_unix_ms(ts)}')
+            print()
+
+        role_label = "**User**" if role == "user" else "**Assistant**"
+        print(f'{role_label} (match, rank {rank:.2f}):')
+        print(f"> {text[:500]}")
+        print()
+
+        if context_size > 0:
+            ctx_before = sconn.execute(
+                """
+                SELECT role, text, timestamp FROM session_text_content
+                WHERE session_id = ? AND timestamp < ? AND rowid != ?
+                ORDER BY timestamp DESC LIMIT ?
+                """,
+                [sid, ts, hit["rowid"], context_size],
+            ).fetchall()
+            for ctx in reversed(ctx_before):
+                crole = "User" if ctx["role"] == "user" else "Assistant"
+                print(f"**{crole}** (context):")
+                print(f"> {ctx['text'][:300]}")
+                print()
+
+            ctx_after = sconn.execute(
+                """
+                SELECT role, text, timestamp FROM session_text_content
+                WHERE session_id = ? AND timestamp > ? AND rowid != ?
+                ORDER BY timestamp ASC LIMIT ?
+                """,
+                [sid, ts, hit["rowid"], context_size],
+            ).fetchall()
+            for ctx in ctx_after:
+                crole = "User" if ctx["role"] == "user" else "Assistant"
+                print(f"**{crole}** (context):")
+                print(f"> {ctx['text'][:300]}")
+                print()
+
+        print("---\n")
+
+    print(f"{len(hits)} results across {len(seen_sessions)} sessions")
+    sconn.close()
+
+
+def cmd_search_sessions(args):
+    sconn = _get_search_conn()
+    _init_search_schema(sconn)
+
+    terms = args.terms
+    rows = sconn.execute(
+        """
+        SELECT session_id, title, project, message_count, time_created
+        FROM indexed_session
+        WHERE title LIKE ? OR project LIKE ?
+        ORDER BY time_created DESC
+        LIMIT 20
+        """,
+        [f"%{terms}%", f"%{terms}%"],
+    ).fetchall()
+
+    if not rows:
+        print(f"No sessions matching: {terms}")
+        sconn.close()
+        return
+
+    print(f'## Sessions matching "{terms}"\n')
+    for row in rows:
+        ts = _iso_from_unix_ms(row["time_created"]) if row["time_created"] else "unknown"
+        print(f"- **{row['title']}** ({row['session_id']})")
+        print(f"  Project: {row['project']} | Messages: {row['message_count']} | {ts}")
+    print(f"\n{len(rows)} sessions")
+    sconn.close()
+
+
+def cmd_search_status(args):
+    sconn = _get_search_conn()
+    _init_search_schema(sconn)
+
+    session_count = sconn.execute("SELECT COUNT(*) as c FROM indexed_session").fetchone()["c"]
+    text_count = sconn.execute("SELECT COUNT(*) as c FROM session_text_content").fetchone()["c"]
+    last_mark_row = sconn.execute(
+        "SELECT value FROM index_state WHERE key = 'last_part_time'"
+    ).fetchone()
+    last_mark = int(last_mark_row["value"]) if last_mark_row else 0
+    db_size = SEARCH_DB.stat().st_size if SEARCH_DB.exists() else 0
+
+    print("Index status:")
+    print(f"  Sessions indexed: {session_count}")
+    print(f"  Text parts indexed: {text_count}")
+    if last_mark:
+        print(f"  Last indexed part: {_iso_from_unix_ms(last_mark)}")
+    else:
+        print(f"  Last indexed part: never")
+    print(f"  Database size: {db_size / (1024 * 1024):.1f} MB")
+    print(f"  Database path: {SEARCH_DB}")
+    sconn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="autolearn",
@@ -635,6 +978,20 @@ def main():
     cur_sub.add_parser("run", help="Run curator (stale/archive transitions)")
     cur_sub.add_parser("status", help="Show curator state")
 
+    srch = sub.add_parser("search", help="FTS5 full-text search over past sessions")
+    srch_sub = srch.add_subparsers(dest="subcommand")
+    srch_init = srch_sub.add_parser("init", help="Build or update the FTS5 search index")
+    srch_init.add_argument("--full", action="store_true", help="Full rebuild instead of incremental")
+    srch_query = srch_sub.add_parser("query", help="Search for messages matching terms")
+    srch_query.add_argument("terms", help="FTS5 search query")
+    srch_query.add_argument("--limit", type=int, default=5, help="Max results (default 5)")
+    srch_query.add_argument("--context", type=int, default=2, help="Surrounding messages per hit (default 2)")
+    srch_query.add_argument("--session", help="Restrict to a specific session ID")
+    srch_query.add_argument("--project", help="Restrict to a specific project")
+    srch_sessions = srch_sub.add_parser("sessions", help="Search session titles")
+    srch_sessions.add_argument("terms", help="Search terms for session titles")
+    srch_sub.add_parser("status", help="Show search index status")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -665,6 +1022,12 @@ def main():
         "curator": {
             "run": cmd_curator_run,
             "status": cmd_curator_status,
+        },
+        "search": {
+            "init": cmd_search_init,
+            "query": cmd_search_query,
+            "sessions": cmd_search_sessions,
+            "status": cmd_search_status,
         },
     }
 

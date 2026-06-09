@@ -67,7 +67,31 @@ Also check for **system-level meta-patterns** before concluding "nothing to reco
 - Is there operational knowledge (how-to verify, testing steps) that would help
   future sessions debug similar issues?
 
-### Step 2: Record observations
+### Step 2: Search past sessions (before concluding "nothing to record")
+
+Before concluding there is nothing to learn, search past conversations for
+related patterns. This catches recurring corrections that weren't promoted to
+memory.
+
+```bash
+uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py search query "<key terms>"
+```
+
+**When to search:**
+- You are uncertain whether a pattern is new or recurring
+- The user expressed frustration about repetition ("I keep saying this", "again?")
+- You are about to conclude "nothing to record" but the topic seems familiar
+- The conversation involves a workaround or technique that may have come up before
+
+**What to do with results:**
+- Past sessions show the same correction before → **strong signal**, strengthen the memory
+- Past sessions reveal a pattern you missed → record as new observation
+- No relevant past sessions → proceed normally
+
+**First-time setup:** If the search returns an error about the index not existing,
+run `autolearn.py search init` first, then retry the query.
+
+### Step 3: Record observations
 
 For user corrections and preferences, record them using improve.py:
 
@@ -82,7 +106,7 @@ Domain choices: python-tooling, git-practices, security, code-style,
 error-handling, testing, documentation, communication, tool-usage,
 search-patterns, or a project-specific domain.
 
-### Step 3: Update memory
+### Step 4: Update memory
 
 **Before adding anything, check for semantic duplicates.** Run:
 
@@ -110,7 +134,7 @@ loaded into every session. Keep the total memory under 3000 characters.
 Good: "This project uses pytest with -x flag for fast feedback loops."
 Bad: "User said to use pytest on Tuesday afternoon during standup."
 
-### Step 4: Update user profile
+### Step 5: Update user profile
 
 For user preferences about communication, workflow, or habits:
 
@@ -118,7 +142,7 @@ For user preferences about communication, workflow, or habits:
 uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py user add "<preference>"
 ```
 
-### Step 5: Create or patch skills
+### Step 6: Create or patch skills
 
 If you see a repeatable pattern, technique, or workflow that deserves
 its own skill:

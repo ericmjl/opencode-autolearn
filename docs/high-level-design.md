@@ -182,6 +182,7 @@ Machine A                              Machine B
 | Skill Management | Create, patch, archive, usage tracking | autolearn.py |
 | Skill Lifecycle | Auto-transition stale/archived, curator with escalation | autolearn.py |
 | Review Agent | Examine conversations, extract learnings | autolearn-reviewer SKILL.md |
+| Session Search | FTS5 full-text search over past OpenCode conversations | autolearn.py, search.db |
 | E2E-Encrypted Sync | Client-side AES-256-GCM, zero-knowledge server | autolearn.py, sync server |
 | Multi-Persona | Isolated knowledge stores per context (work/personal/OSS) | autolearn.py |
 | Backend-Agnostic Sync | Convex (managed) or self-hosted (Fastify+SQLite) | sync server |
@@ -210,3 +211,4 @@ Machine A                              Machine B
 - [Sync Encryption LLD](./designs/sync/encryption-LLD.md)
 - [Sync Protocol LLD](./designs/sync/protocol-LLD.md)
 - [Multi-Persona LLD](./designs/sync/persona-LLD.md)
+- [Session Search LLD](./designs/session-search/LLD.md)
