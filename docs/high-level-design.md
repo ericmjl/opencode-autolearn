@@ -12,13 +12,16 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 2. **Behavioral escalation** — Detect when a correction recurs across projects and escalate it into persistent agent instructions (AGENTS.md).
 3. **Skill evolution** — Allow the agent to create, patch, and retire its own skills based on observed patterns.
 4. **Zero-friction operation** — Work as a background plugin that requires no user intervention during normal operation.
+5. **Cross-machine sync** — Propagate learned knowledge between machines via an E2E-encrypted sync service.
 
 ## Non-Goals
 
 - **Cross-agent synchronization** — Each agent harness manages its own autolearn store; no sync between Claude Code, Copilot, etc.
-- **Cloud-based memory** — All data stays local on the user's machine.
+- **Cloud-based memory (plaintext)** — All data stays local by default. Sync is optional and E2E-encrypted; the server never sees plaintext.
 - **Model fine-tuning** — Autolearn changes agent behavior via instructions and skills, not model weights.
 - **Self-improving-agent integration** — The `improve.py` observation/escalation CLI is a separate package that works alongside autolearn but is not bundled with it.
+- **Real-time collaborative editing** — Single-writer per persona per machine at a time.
+- **Cross-user persona sharing** — Personas are private to one user (future: team personas with key exchange).
 
 ## Target Users
 
@@ -28,53 +31,45 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     OpenCode Runtime                        │
-│                                                             │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │              autolearn.js (Plugin)                     │  │
-│  │                                                       │  │
-│  │  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐  │  │
-│  │  │  Turn       │  │  Buffer      │  │  Idle       │  │  │
-│  │  │  Counter    │→ │  Manager     │→ │  Detector   │  │  │
-│  │  └─────────────┘  └──────────────┘  └─────────────┘  │  │
-│  │                           │                           │  │
-│  │                    ┌──────▼──────┐                    │  │
-│  │                    │  Review     │                    │  │
-│  │                    │  Spawner    │                    │  │
-│  │                    └──────┬──────┘                    │  │
-│  └───────────────────────────┼───────────────────────────┘  │
-│                              │                               │
-│                    opencode run (subagent)                   │
-│                              │                               │
-│  ┌───────────────────────────▼───────────────────────────┐  │
-│  │         autolearn-reviewer (Agent + Skill)             │  │
-│  │                                                       │  │
-│  │  Reads conversation → Extracts learnings →            │  │
-│  │  Updates memory/skills/user-profile                   │  │
-│  └───────────────────────────┬───────────────────────────┘  │
-│                              │                               │
-│  ┌───────────────────────────▼───────────────────────────┐  │
-│  │            autolearn.py (CLI)                          │  │
-│  │                                                       │  │
-│  │  memory add/remove/list                               │  │
-│  │  user add/remove/list                                 │  │
-│  │  skill create/patch/archive/list/usage                │  │
-│  │  curator run/status                                   │  │
-│  └───────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                    ┌─────────▼─────────┐
-                    │   ~/.autolearn/   │
-                    │   (Data Store)    │
-                    │                   │
-                    │   memory.md       │
-                    │   user-profile.md │
-                    │   observations.jsonl
-                    │   config.yaml     │
-                    │   skills/         │
-                    │   reviews/        │
-                    └───────────────────┘
+Machine A                              Machine B
+┌──────────────────────────────────┐   ┌──────────────────────────────────┐
+│         OpenCode Runtime         │   │         OpenCode Runtime         │
+│                                  │   │                                  │
+│  ┌────────────────────────────┐  │   │  ┌────────────────────────────┐  │
+│  │     autolearn.js (Plugin)  │  │   │  │     autolearn.js (Plugin)  │  │
+│  │  Turn Counter → Buffer     │  │   │  │  Turn Counter → Buffer     │  │
+│  │  → Idle → Review Spawner   │  │   │  │  → Idle → Review Spawner   │  │
+│  └────────────┬───────────────┘  │   │  └────────────┬───────────────┘  │
+│               │                  │   │               │                  │
+│     autolearn-reviewer agent     │   │     autolearn-reviewer agent     │
+│               │                  │   │               │                  │
+│  ┌────────────▼───────────────┐  │   │  ┌────────────▼───────────────┐  │
+│  │     autolearn.py (CLI)     │  │   │  │     autolearn.py (CLI)     │  │
+│  │                            │  │   │  │                            │  │
+│  │  memory/user/skill/curator │  │   │  │  memory/user/skill/curator │  │
+│  │  sync push/pull (E2E enc)  │  │   │  │  sync push/pull (E2E enc)  │  │
+│  └────────────┬───────────────┘  │   │  └────────────┬───────────────┘  │
+│               │                  │   │               │                  │
+│  ┌────────────▼───────────────┐  │   │  ┌────────────▼───────────────┐  │
+│  │  ~/.autolearn/             │  │   │  │  ~/.autolearn/             │  │
+│  │  personas/                 │  │   │  │  personas/                 │  │
+│  │    default/                │  │   │  │    default/                │  │
+│  │    work/                   │  │   │  │    work/                   │  │
+│  │    personal/               │  │   │  │    personal/               │  │
+│  └────────────────────────────┘  │   │  └────────────────────────────┘  │
+└──────────────────────────────────┘   └──────────────────────────────────┘
+                  │                                      │
+                  └──────────────┬───────────────────────┘
+                                 │  HTTPS (TLS)
+                          ┌──────▼──────┐
+                          │ Sync Server │
+                          │ (opaque     │
+                          │  encrypted  │
+                          │  blobs only)│
+                          │             │
+                          │ Convex or   │
+                          │ self-hosted │
+                          └─────────────┘
 ```
 
 ## Key Design Decisions
@@ -119,25 +114,62 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 - Node.js CLI: Would match the plugin language but the reviewer agent works better with Python for string processing and YAML manipulation.
 - Direct file writes from the skill: Fragile, no validation, no deduplication logic.
 
+### Decision 5: E2E-encrypted sync (zero-knowledge server)
+
+**Choice**: Client-side AES-256-GCM encryption before syncing. The server stores only opaque ciphertext.
+
+**Rationale**: Sync requires trusting a server with personal coding preferences and habits. E2E encryption means even the database operator (including the user viewing the Convex dashboard) cannot read the content. Master password → PBKDF2 → per-file encryption keys derived via HMAC chain. OS keychain stores the derived key for convenience.
+
+**Alternatives considered**:
+- Plaintext sync (trust the server): Simpler but unacceptable for privacy-sensitive learning data.
+- Per-file symmetric keys without key hierarchy: Simpler but no isolation between personas.
+- Asymmetric encryption (public key): Overkill for single-user data, adds complexity.
+
+### Decision 6: Multi-persona knowledge stores
+
+**Choice**: Each persona is an isolated subdirectory under `~/.autolearn/personas/{name}/` with its own complete set of files, synced independently.
+
+**Rationale**: Developers operate in distinct contexts (work, personal, OSS) with different conventions and tooling. Mixing them into one memory store creates noise — a work-specific CI pattern isn't useful in personal projects. Personas are client-side namespaced (UUIDs on the server), so persona names like "work" never leave the machine.
+
+**Alternatives considered**:
+- Tags on entries instead of separate stores: Requires filtering on every read, no isolation.
+- Multiple autolearn installations: Duplication, each needs its own plugin config.
+- Single store with persona field: Leakage risk, complex filtering.
+
+### Decision 7: Backend-agnostic sync API (Convex or self-hosted)
+
+**Choice**: A thin sync API spec (push/pull/status) that any backend can implement. Ships with a Convex backend and a self-hosted Fastify+SQLite backend.
+
+**Rationale**: Users should not be locked into a specific hosting provider. The managed Convex service is convenient (deploy with `npx convex deploy`), but fully self-hosting should be equally easy (Docker image or bare Node process). The CLI is backend-agnostic — it only needs a URL and API key.
+
+**Alternatives considered**:
+- Convex only: Lock-in, users must create a Convex account.
+- Generic S3/object store: No conflict detection, no per-file metadata, no auth built in.
+- Git-based sync: Merge conflicts on markdown bullet lists, requires git knowledge, no realtime.
+
 ## Data Store Layout
 
 ```
 ~/.autolearn/
-├── config.yaml              # Thresholds, intervals, flags
-├── memory.md                # Persistent lessons loaded into every session
-├── user-profile.md          # User preferences and habits
-├── observations.jsonl       # Event log (append-only, trimmed to 1000 lines)
-├── strengths.json           # Reinforcement counters per memory entry
-├── reviews/                 # Generated review markdown files
-│   └── review-{timestamp}.md
-├── skills/                  # Agent-created skills
-│   ├── {skill-name}/
-│   │   └── SKILL.md
-│   ├── .archive/            # Archived skills
-│   └── .usage.json          # Skill usage telemetry
-├── .curator_state.json      # Curator run history
-├── debug.log                # Debug output (when AUTOLEARN_DEBUG=1)
-└── event-diagnostics.txt    # Diagnostic dumps
+├── personas/
+│   └── default/                ← no --persona flag = "default"
+│       ├── config.yaml         # Thresholds, intervals, flags
+│       ├── memory.md           # Persistent lessons loaded into every session
+│       ├── user-profile.md     # User preferences and habits
+│       ├── observations.jsonl  # Event log (append-only, trimmed to 1000 lines)
+│       ├── strengths.json      # Reinforcement counters per memory entry
+│       ├── reviews/            # Generated review markdown files
+│       │   └── review-{timestamp}.md
+│       ├── skills/             # Agent-created skills
+│       │   ├── {skill-name}/
+│       │   │   └── SKILL.md
+│       │   ├── .archive/       # Archived skills
+│       │   └── .usage.json     # Skill usage telemetry
+│       └── .curator_state.json # Curator run history
+├── sync.yaml                   # Sync config (server URL, machine ID, active personas)
+├── .encryption_salt            # Per-installation salt for key derivation
+├── debug.log                   # Debug output (when AUTOLEARN_DEBUG=1)
+└── event-diagnostics.txt       # Diagnostic dumps
 ```
 
 ## Feature Breakdown
@@ -150,6 +182,9 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 | Skill Management | Create, patch, archive, usage tracking | autolearn.py |
 | Skill Lifecycle | Auto-transition stale/archived, curator with escalation | autolearn.py |
 | Review Agent | Examine conversations, extract learnings | autolearn-reviewer SKILL.md |
+| E2E-Encrypted Sync | Client-side AES-256-GCM, zero-knowledge server | autolearn.py, sync server |
+| Multi-Persona | Isolated knowledge stores per context (work/personal/OSS) | autolearn.py |
+| Backend-Agnostic Sync | Convex (managed) or self-hosted (Fastify+SQLite) | sync server |
 
 ## Risks and Mitigations
 
@@ -161,6 +196,10 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 | Stale review files | Auto-cleanup based on `stale_after_days` config |
 | Secret leakage | Regex redaction of API keys, tokens, passwords from buffered messages |
 | Concurrent writes | Review subprocess writes to unique timestamped files; no file-level contention |
+| Sync server breach | Server stores only ciphertext — no plaintext exposure even with full DB access |
+| Lost encryption key | Data is irrecoverable by design. `sync export-key` creates offline backup |
+| Sync conflicts | Last-write-wins by timestamp; append-only merge for observations.jsonl |
+| Persona isolation failure | Per-persona HMAC-derived keys — compromising one persona doesn't expose others |
 
 ## Related Designs
 
@@ -168,3 +207,6 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 - [Knowledge Store LLD](./designs/knowledge-store/LLD.md)
 - [Skill Management LLD](./designs/skill-management/LLD.md)
 - [Review Agent LLD](./designs/review-agent/LLD.md)
+- [Sync Encryption LLD](./designs/sync/encryption-LLD.md)
+- [Sync Protocol LLD](./designs/sync/protocol-LLD.md)
+- [Multi-Persona LLD](./designs/sync/persona-LLD.md)
