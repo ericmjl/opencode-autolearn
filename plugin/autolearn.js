@@ -12,6 +12,7 @@
 
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -27,9 +28,11 @@ const CONFIG_FILE = join(AL_HOME, "config.yaml")
 const MEMORY_FILE = join(AL_HOME, "memory.md")
 const USER_FILE = join(AL_HOME, "user-profile.md")
 const OBS_FILE = join(AL_HOME, "observations.jsonl")
+const BIN_DIR = join(AL_HOME, "bin")
 const REVIEWS_DIR = join(AL_HOME, "reviews")
 const SKILLS_DIR = join(AL_HOME, "skills")
 const ARCHIVE_DIR = join(SKILLS_DIR, ".archive")
+const WRAPPER_SCRIPT = join(BIN_DIR, "review-runner.sh")
 const THRESHOLD_DEFAULT = 5
 const STALE_DAYS_DEFAULT = 30
 const IDLE_COOLDOWN_MS = 300000
@@ -55,6 +58,7 @@ function redact(str) {
 
 // @spec KS-MEM-001 (ensures directory tree exists before any operation)
 function ensureStore() {
+  mkdirSync(BIN_DIR, { recursive: true })
   mkdirSync(SKILLS_DIR, { recursive: true })
   mkdirSync(ARCHIVE_DIR, { recursive: true })
   mkdirSync(REVIEWS_DIR, { recursive: true })
@@ -66,6 +70,26 @@ function ensureStore() {
   }
   if (!existsSync(CONFIG_FILE)) {
     writeFileSync(CONFIG_FILE, `review_threshold: ${THRESHOLD_DEFAULT}\nsession_review_on_idle: true\nmax_conversation_buffer: 50\ncurator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\n`)
+  }
+  ensureWrapper()
+}
+
+const WRAPPER_CONTENT = `#!/bin/sh
+# Autolearn review runner - runs opencode review and deletes the session afterward
+# Args: passed directly to \`opencode run --format json\`
+OUT=$(mktemp "\${TMPDIR:-/tmp}/alreview.XXXXXX")
+opencode run --format json "$@" > "$OUT" 2>/dev/null
+SID=$(sed -n '1{s/.*"sessionID":"\\([^"]*\\)".*/\\1/p;}' "$OUT")
+rm -f "$OUT"
+[ -n "$SID" ] && opencode session delete "$SID" >/dev/null 2>&1
+`
+
+function ensureWrapper() {
+  try {
+    writeFileSync(WRAPPER_SCRIPT, WRAPPER_CONTENT)
+    chmodSync(WRAPPER_SCRIPT, 0o755)
+  } catch (err) {
+    dbg("ensureWrapper failed:", err.message)
   }
 }
 
@@ -172,9 +196,9 @@ export const AutolearnPlugin = async (ctx) => {
       dbg("REVIEW FILE WRITTEN", reviewFile)
 
       // @spec CM-RS-008, CM-RS-009, CM-RS-010
-      const args = ["run", reviewMd, "--agent", "autolearn-reviewer", "--title", "autolearn review"]
+      const args = [reviewMd, "--agent", "autolearn-reviewer", "--title", "autolearn review"]
 
-      const proc = Bun.spawn(["opencode", ...args], {
+      const proc = Bun.spawn([WRAPPER_SCRIPT, ...args], {
         stdout: "ignore",
         stderr: "ignore",
         detached: true,
@@ -268,8 +292,8 @@ export const AutolearnPlugin = async (ctx) => {
       const reviewFile = join(REVIEWS_DIR, `review-exit-${Date.now()}.md`)
       writeFileSync(reviewFile, reviewMd)
 
-      const args = ["run", reviewMd, "--agent", "autolearn-reviewer", "--title", "autolearn exit review"]
-      Bun.spawn(["opencode", ...args], {
+      const args = [reviewMd, "--agent", "autolearn-reviewer", "--title", "autolearn exit review"]
+      Bun.spawn([WRAPPER_SCRIPT, ...args], {
         stdout: "ignore",
         stderr: "ignore",
         detached: true,
