@@ -46,7 +46,7 @@ bash opencode-autolearn/install.sh
 ### What the installer does
 
 1. Copies `plugin/autolearn.js` to `~/.config/opencode/plugins/`
-2. Copies `skills/autolearn-reviewer` and `skills/autolearn-curator` to `~/.agents/skills/`
+2. Copies `skills/autolearn-reviewer`, `skills/autolearn-curator`, and `skills/self-improving-agent` to `~/.agents/skills/`
 3. Patches `~/.config/opencode/opencode.json` to register the plugin, instructions, and reviewer agent
 4. Runs `autolearn.py init` to create `~/.autolearn/` with defaults
 
@@ -154,6 +154,8 @@ uv run ... autolearn.py curator status
 ~/.agents/skills/
 ├── autolearn-reviewer/      # installed skill (you copied this)
 ├── autolearn-curator/       # installed skill (you copied this)
+├── self-improving-agent/    # installed skill (behavioral rule tracker)
+│   └── scripts/improve.py   # CLI for observe/escalate/stale
 └── {learned-skill} → ~/.autolearn/skills/{learned-skill}/  # symlinks
 ```
 

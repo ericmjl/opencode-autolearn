@@ -36,6 +36,7 @@ echo "[2/5] Installing skills..."
 mkdir -p "$SKILLS_DIR"
 cp -r "$REPO_DIR/skills/autolearn-reviewer" "$SKILLS_DIR/"
 cp -r "$REPO_DIR/skills/autolearn-curator" "$SKILLS_DIR/"
+cp -r "$REPO_DIR/skills/self-improving-agent" "$SKILLS_DIR/"
 
 # 3. Patch opencode.json
 echo "[3/5] Configuring opencode.json..."
@@ -123,6 +124,7 @@ OK=true
 [[ -f "$PLUGIN_DIR/autolearn.js" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn.js"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn-reviewer/SKILL.md" ]] || { echo "  MISSING: skills/autolearn-reviewer"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn-curator/SKILL.md" ]] || { echo "  MISSING: skills/autolearn-curator"; OK=false; }
+[[ -f "$SKILLS_DIR/self-improving-agent/SKILL.md" ]] || { echo "  MISSING: skills/self-improving-agent"; OK=false; }
 [[ -f "$HOME/.autolearn/memory.md" ]] || { echo "  MISSING: ~/.autolearn/memory.md"; OK=false; }
 
 echo ""
