@@ -131,7 +131,37 @@ uv run ... autolearn.py skill usage
 # Curator (lifecycle management)
 uv run ... autolearn.py curator run
 uv run ... autolearn.py curator status
+
+# Session search (FTS5 over past OpenCode conversations)
+uv run ... autolearn.py search init [--full]      # build/update the search index
+uv run ... autolearn.py search query "<terms>" \  # full-text search across messages
+    [--limit N] [--context N] [--session ID] [--project NAME]
+uv run ... autolearn.py search sessions "<terms>" # search session titles
+uv run ... autolearn.py search status             # show index size and coverage
 ```
+
+Run `search init` once (before your first query) to populate the index from OpenCode's session DB. The reviewer skill does this on demand; to pre-build it manually, run `search init` and re-run periodically (or pass `--full` for a complete rebuild).
+
+## Two CLIs, two stores
+
+Autolearn ships **two** Python CLIs that work together. The README sections above cover `autolearn.py`; the second one comes from the `self-improving-agent` skill:
+
+| CLI | Location | Store | Purpose |
+|-----|----------|-------|---------|
+| `autolearn.py` | `~/.agents/skills/autolearn-reviewer/scripts/autolearn.py` | `~/.autolearn/` | Memory, skills, curator, search |
+| `improve.py` | `~/.agents/skills/self-improving-agent/scripts/improve.py` | `~/.agent-improvement/rules.yaml` | Behavioral rule tracking and AGENTS.md escalation |
+
+The reviewer records corrections via `improve.py observe ...` (Step 3 of the reviewer skill), then `improve.py escalate --apply` promotes repeated rules into the appropriate `AGENTS.md` file. Common commands:
+
+```bash
+uv run ~/.agents/skills/self-improving-agent/scripts/improve.py status          # show all rules + counts
+uv run ~/.agents/skills/self-improving-agent/scripts/improve.py observe "<rule>" --project <name> [--domain <domain>]
+uv run ~/.agents/skills/self-improving-agent/scripts/improve.py due              # rules ready for escalation
+uv run ~/.agents/skills/self-improving-agent/scripts/improve.py escalate --dry-run
+uv run ~/.agents/skills/self-improving-agent/scripts/improve.py escalate --apply  # write to AGENTS.md
+```
+
+See [`skills/self-improving-agent/SKILL.md`](skills/self-improving-agent/SKILL.md) for the full escalation logic and domain taxonomy.
 
 ## Data layout
 
@@ -143,7 +173,13 @@ uv run ... autolearn.py curator status
 ├── observations.jsonl       # event log (auto-trimmed to 1000 lines)
 ├── strengths.json           # reinforcement counters per memory entry
 ├── reviews/                 # generated review markdown files
-│   └── review-{timestamp}.md
+│   ├── review-{timestamp}.md
+│   └── review-exit-{timestamp}.md
+├── review-failed-{ts}.md    # reviews that errored (kept for debugging)
+├── search.db                # FTS5 index over past OpenCode sessions
+├── bin/                     # wrapper scripts written by the plugin
+│   └── review-runner.sh
+├── debug.log                # verbose plugin output (when AUTOLEARN_DEBUG=1)
 ├── skills/                  # agent-created skills (real location)
 │   ├── {skill-name}/
 │   │   └── SKILL.md
@@ -157,14 +193,17 @@ uv run ... autolearn.py curator status
 ├── self-improving-agent/    # installed skill (behavioral rule tracker)
 │   └── scripts/improve.py   # CLI for observe/escalate/stale
 └── {learned-skill} → ~/.autolearn/skills/{learned-skill}/  # symlinks
+
+~/.agent-improvement/
+└── rules.yaml               # improve.py rule store (observations, counts, written_to)
 ```
 
 ## Design docs
 
 Full design documentation lives in `docs/`:
 
-- [`docs/high-level-design.md`](docs/high-level-design.md) — architecture, decisions, risk matrix
-- [`docs/designs/`](docs/designs/) — 4 LLDs and 8 EARS specifications with full traceability
+- [`docs/high-level-design.md`](docs/high-level-design.md) — architecture, decisions, risk matrix. Each feature and decision is marked `shipped` or `planned`.
+- [`docs/designs/`](docs/designs/) — 5 LLDs and 8 EARS specifications for shipped features (conversation monitoring, knowledge store, skill management, review agent, session search), plus 3 LLDs and 3 EARS for planned sync/multi-persona work. See [`docs/README.md`](docs/README.md) for a status-indexed overview.
 
 ## Running the curator on a schedule
 
@@ -173,6 +212,50 @@ Full design documentation lives in `docs/`:
 opencode schedule "autolearn-curator" --cron "0 3 * * 0" \
   --agent autolearn-reviewer \
   --prompt "Load the autolearn-curator skill and run the curator."
+```
+
+## Troubleshooting
+
+**Reviews silently failing.** When a threshold- or idle-triggered review fails to spawn, the plugin saves the formatted review (context + conversation) to `~/.autolearn/review-failed-{timestamp}.md`. List recent failures with `ls ~/.autolearn/review-failed-*.md`. The error itself is logged to `~/.autolearn/debug.log` (when `AUTOLEARN_DEBUG=1` is set) and to stderr — read the most recent failure file to see which conversation triggered it.
+
+**Enabling debug output.** Set `AUTOLEARN_DEBUG=1` before starting OpenCode to write verbose plugin output to `~/.autolearn/debug.log`.
+
+**Recursive review spawning.** The plugin guards against this with an `AUTOLEARN_REVIEWER=1` environment variable in the spawned subprocess. If you see rapid-fire review entries in `observations.jsonl` seconds apart, verify this guard is in effect.
+
+**Search index issues.** If `search query` returns empty results, the index may not have been built yet. Run `search init` once to populate it, or `search init --full` for a complete rebuild. Use `search status` to check index size and coverage.
+
+**Manual verification.** Confirm the store is healthy:
+
+```bash
+uv run ~/.agents/skills/autolearn-reviewer/scripts/autolearn.py memory list
+uv run ~/.agents/skills/autolearn-reviewer/scripts/autolearn.py search status
+uv run ~/.agents/skills/autolearn-reviewer/scripts/autolearn.py curator status
+```
+
+## Privacy
+
+Autolearn records conversation excerpts locally to learn from them. By default **nothing leaves your machine**:
+
+- All data lives under `~/.autolearn/` and `~/.agent-improvement/`.
+- Messages are redacted of likely secrets (API keys, tokens, passwords) before buffering.
+- The plugin and CLI do not make outbound network requests. Sync (planned) will be opt-in and E2E-encrypted — see [`docs/high-level-design.md`](docs/high-level-design.md) Decisions 5–7.
+- To wipe everything: `rm -rf ~/.autolearn ~/.agent-improvement` and remove the plugin/instructions entries from `~/.config/opencode/opencode.json`.
+
+## Uninstall
+
+There is no automated uninstaller. To remove manually:
+
+```bash
+# Remove plugin and installed skills
+rm ~/.config/opencode/plugins/autolearn.js
+rm -rf ~/.agents/skills/autolearn-reviewer ~/.agents/skills/autolearn-curator ~/.agents/skills/self-improving-agent
+
+# Remove local data stores (optional — keeps your learned memory/skills)
+# rm -rf ~/.autolearn ~/.agent-improvement
+
+# Edit ~/.config/opencode/opencode.json and remove the
+# "autolearn.js" plugin entry, the "~/.autolearn/memory.md"
+# instructions entry, and the "autolearn-reviewer" agent entry.
 ```
 
 ## License

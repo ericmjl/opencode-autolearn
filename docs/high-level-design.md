@@ -1,6 +1,12 @@
 # OpenCode Autolearn - High-Level Design
 
 **Created**: 2026-06-05
+**Last updated**: 2026-06-14
+
+> **Status legend** — Feature Breakdown and Key Design Decisions mark each item as
+> `shipped` (implemented in `autolearn.py` / `autolearn.js`), `planned` (designed
+> but not yet implemented), or `partial`. Sync, multi-persona, and E2E encryption
+> are designed but not yet built — their LLD/EARS docs describe the target design.
 
 ## Problem Statement
 
@@ -8,18 +14,18 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 
 ## Goals
 
-1. **Automatic learning** — Capture user corrections and preferences from conversation flow without requiring explicit "remember this" commands.
-2. **Behavioral escalation** — Detect when a correction recurs across projects and escalate it into persistent agent instructions (AGENTS.md).
-3. **Skill evolution** — Allow the agent to create, patch, and retire its own skills based on observed patterns.
-4. **Zero-friction operation** — Work as a background plugin that requires no user intervention during normal operation.
-5. **Cross-machine sync** — Propagate learned knowledge between machines via an E2E-encrypted sync service.
+1. **Automatic learning** — Capture user corrections and preferences from conversation flow without requiring explicit "remember this" commands. _(shipped)_
+2. **Behavioral escalation** — Detect when a correction recurs across projects and escalate it into persistent agent instructions (AGENTS.md). _(shipped via `self-improving-agent/improve.py`)_
+3. **Skill evolution** — Allow the agent to create, patch, and retire its own skills based on observed patterns. _(shipped)_
+4. **Zero-friction operation** — Work as a background plugin that requires no user intervention during normal operation. _(shipped)_
+5. **Cross-machine sync** — Propagate learned knowledge between machines via an E2E-encrypted sync service. _(planned — see Decisions 5–7 and `docs/designs/sync/`)_
 
 ## Non-Goals
 
 - **Cross-agent synchronization** — Each agent harness manages its own autolearn store; no sync between Claude Code, Copilot, etc.
 - **Cloud-based memory (plaintext)** — All data stays local by default. Sync is optional and E2E-encrypted; the server never sees plaintext.
 - **Model fine-tuning** — Autolearn changes agent behavior via instructions and skills, not model weights.
-- **Self-improving-agent integration** — The `improve.py` observation/escalation CLI is a separate package that works alongside autolearn but is not bundled with it.
+- **Self-improving-agent invocation boundary** — The `improve.py` observation/escalation CLI is bundled in this repo (under `skills/self-improving-agent/`) but is **not invoked directly by the plugin** — only the reviewer agent calls it via the SKILL.md protocol. This keeps the plugin thin and lets the reviewer decide when a correction is worth recording.
 - **Real-time collaborative editing** — Single-writer per persona per machine at a time.
 - **Cross-user persona sharing** — Personas are private to one user (future: team personas with key exchange).
 
@@ -114,7 +120,7 @@ Machine A                              Machine B
 - Node.js CLI: Would match the plugin language but the reviewer agent works better with Python for string processing and YAML manipulation.
 - Direct file writes from the skill: Fragile, no validation, no deduplication logic.
 
-### Decision 5: E2E-encrypted sync (zero-knowledge server)
+### Decision 5: E2E-encrypted sync (zero-knowledge server) — _planned_
 
 **Choice**: Client-side AES-256-GCM encryption before syncing. The server stores only opaque ciphertext.
 
@@ -125,7 +131,7 @@ Machine A                              Machine B
 - Per-file symmetric keys without key hierarchy: Simpler but no isolation between personas.
 - Asymmetric encryption (public key): Overkill for single-user data, adds complexity.
 
-### Decision 6: Multi-persona knowledge stores
+### Decision 6: Multi-persona knowledge stores — _planned_
 
 **Choice**: Each persona is an isolated subdirectory under `~/.autolearn/personas/{name}/` with its own complete set of files, synced independently.
 
@@ -136,7 +142,7 @@ Machine A                              Machine B
 - Multiple autolearn installations: Duplication, each needs its own plugin config.
 - Single store with persona field: Leakage risk, complex filtering.
 
-### Decision 7: Backend-agnostic sync API (Convex or self-hosted)
+### Decision 7: Backend-agnostic sync API (Convex or self-hosted) — _planned_
 
 **Choice**: A thin sync API spec (push/pull/status) that any backend can implement. Ships with a Convex backend and a self-hosted Fastify+SQLite backend.
 
@@ -149,43 +155,70 @@ Machine A                              Machine B
 
 ## Data Store Layout
 
+### Current (shipped)
+
+```
+~/.autolearn/
+├── config.yaml                # Thresholds, intervals, flags
+├── memory.md                  # Persistent lessons loaded into every session
+├── user-profile.md            # User preferences and habits
+├── observations.jsonl         # Event log (append-only, trimmed to 1000 lines)
+├── strengths.json             # Reinforcement counters per memory entry
+├── reviews/                   # Generated review markdown files
+│   ├── review-{timestamp}.md        # threshold/idle-triggered reviews
+│   └── review-exit-{timestamp}.md   # exit-triggered reviews
+├── review-failed-{ts}.md      # Reviews that errored (kept for debugging)
+├── skills/                    # Agent-created skills
+│   ├── {skill-name}/
+│   │   └── SKILL.md
+│   ├── .archive/              # Archived skills
+│   └── .usage.json            # Skill usage telemetry
+├── search.db                  # FTS5 index over past OpenCode sessions
+├── bin/                       # Wrapper scripts written by the plugin
+│   └── review-runner.sh
+├── debug.log                  # Verbose plugin output (when AUTOLEARN_DEBUG=1)
+└── .curator_state.json        # Curator run history
+```
+
+### Planned (when sync/multi-persona ship)
+
+The flat layout above moves under `personas/{name}/`:
+
 ```
 ~/.autolearn/
 ├── personas/
-│   └── default/                ← no --persona flag = "default"
-│       ├── config.yaml         # Thresholds, intervals, flags
-│       ├── memory.md           # Persistent lessons loaded into every session
-│       ├── user-profile.md     # User preferences and habits
-│       ├── observations.jsonl  # Event log (append-only, trimmed to 1000 lines)
-│       ├── strengths.json      # Reinforcement counters per memory entry
-│       ├── reviews/            # Generated review markdown files
-│       │   └── review-{timestamp}.md
-│       ├── skills/             # Agent-created skills
+│   └── default/               ← no --persona flag = "default"
+│       ├── config.yaml
+│       ├── memory.md
+│       ├── user-profile.md
+│       ├── observations.jsonl
+│       ├── strengths.json
+│       ├── reviews/
+│       ├── skills/
 │       │   ├── {skill-name}/
 │       │   │   └── SKILL.md
-│       │   ├── .archive/       # Archived skills
-│       │   └── .usage.json     # Skill usage telemetry
-│       └── .curator_state.json # Curator run history
-├── sync.yaml                   # Sync config (server URL, machine ID, active personas)
-├── .encryption_salt            # Per-installation salt for key derivation
-├── debug.log                   # Debug output (when AUTOLEARN_DEBUG=1)
-└── event-diagnostics.txt       # Diagnostic dumps
+│       │   ├── .archive/
+│       │   └── .usage.json
+│       └── .curator_state.json
+├── sync.yaml                  # Sync config (server URL, machine ID, active personas)
+└── .encryption_salt           # Per-installation salt for key derivation
 ```
 
 ## Feature Breakdown
 
-| Feature | Description | Components |
-|---------|-------------|------------|
-| Conversation Monitoring | Count turns, buffer messages, detect idle, exit review | autolearn.js |
-| Review Spawning | Format and dispatch reviews at thresholds and on exit | autolearn.js |
-| Knowledge Store | Memory, user profile, observations, reinforcement tracking | autolearn.py |
-| Skill Management | Create, patch, archive, usage tracking | autolearn.py |
-| Skill Lifecycle | Auto-transition stale/archived, curator with escalation | autolearn.py |
-| Review Agent | Examine conversations, extract learnings | autolearn-reviewer SKILL.md |
-| Session Search | FTS5 full-text search over past OpenCode conversations | autolearn.py, search.db |
-| E2E-Encrypted Sync | Client-side AES-256-GCM, zero-knowledge server | autolearn.py, sync server |
-| Multi-Persona | Isolated knowledge stores per context (work/personal/OSS) | autolearn.py |
-| Backend-Agnostic Sync | Convex (managed) or self-hosted (Fastify+SQLite) | sync server |
+| Feature | Status | Description | Components |
+|---------|--------|-------------|------------|
+| Conversation Monitoring | shipped | Count turns, buffer messages, detect idle, exit review | autolearn.js |
+| Review Spawning | shipped | Format and dispatch reviews at thresholds and on exit | autolearn.js |
+| Knowledge Store | shipped | Memory, user profile, observations, reinforcement tracking | autolearn.py |
+| Skill Management | shipped | Create, patch, archive, usage tracking | autolearn.py |
+| Skill Lifecycle | shipped | Auto-transition stale/archived, curator with escalation | autolearn.py |
+| Review Agent | shipped | Examine conversations, extract learnings | autolearn-reviewer SKILL.md |
+| Session Search | shipped | FTS5 full-text search over past OpenCode conversations | autolearn.py, search.db |
+| Behavioral Escalation | shipped | Cross-project rule tracking and AGENTS.md writes | self-improving-agent/improve.py |
+| E2E-Encrypted Sync | planned | Client-side AES-256-GCM, zero-knowledge server | autolearn.py, sync server |
+| Multi-Persona | planned | Isolated knowledge stores per context (work/personal/OSS) | autolearn.py |
+| Backend-Agnostic Sync | planned | Convex (managed) or self-hosted (Fastify+SQLite) | sync server |
 
 ## Risks and Mitigations
 
@@ -204,11 +237,16 @@ Machine A                              Machine B
 
 ## Related Designs
 
-- [Conversation Monitoring LLD](./designs/conversation-monitoring/LLD.md)
-- [Knowledge Store LLD](./designs/knowledge-store/LLD.md)
-- [Skill Management LLD](./designs/skill-management/LLD.md)
-- [Review Agent LLD](./designs/review-agent/LLD.md)
-- [Sync Encryption LLD](./designs/sync/encryption-LLD.md)
-- [Sync Protocol LLD](./designs/sync/protocol-LLD.md)
-- [Multi-Persona LLD](./designs/sync/persona-LLD.md)
+### Shipped
+
+- [Conversation Monitoring LLD](./designs/conversation-monitoring/LLD.md) (+ 2 EARS: turn-counting, review-spawning)
+- [Knowledge Store LLD](./designs/knowledge-store/LLD.md) (+ 2 EARS: memory-management, observations-logging)
+- [Skill Management LLD](./designs/skill-management/LLD.md) (+ 2 EARS: skill-crud, skill-lifecycle)
+- [Review Agent LLD](./designs/review-agent/LLD.md) (+ 2 EARS: conversation-evaluation, action-execution)
 - [Session Search LLD](./designs/session-search/LLD.md)
+
+### Planned (designs describe target state, not current code)
+
+- [Sync Encryption LLD](./designs/sync/encryption-LLD.md) (+ EARS)
+- [Sync Protocol LLD](./designs/sync/protocol-LLD.md) (+ EARS)
+- [Multi-Persona LLD](./designs/sync/persona-LLD.md) (+ EARS)
