@@ -21,7 +21,7 @@ import json
 import os
 import sqlite3
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -929,6 +929,52 @@ def cmd_search_status(args):
     sconn.close()
 
 
+def _trim_jsonl(path: Path, max_lines: int = 1000):
+    """Trim a JSONL file to the last max_lines entries."""
+    try:
+        content = path.read_text()
+        lines = content.strip().split("\n") if content.strip() else []
+        if len(lines) > max_lines:
+            path.write_text("\n".join(lines[-max_lines:]) + "\n")
+    except (OSError, IndexError):
+        pass
+
+
+# @spec KS-OBS-007
+def cmd_log_review_complete(args):
+    """Log a review-complete event to observations.jsonl.
+
+    Creates an audit trail for detecting systematic capture gaps.
+    """
+    _ensure_dirs()
+    entry: dict = {
+        "type": "review_complete",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if getattr(args, "nothing", False):
+        entry["nothing_recorded"] = True
+        entry["observations"] = 0
+    else:
+        entry["observations"] = getattr(args, "observations", 0) or 0
+        entry["memory_updated"] = getattr(args, "memory_updated", False) or False
+        entry["user_profile_updated"] = getattr(args, "user_profile_updated", False) or False
+        entry["skills_created"] = getattr(args, "skills_created", 0) or 0
+        entry["skills_patched"] = getattr(args, "skills_patched", 0) or 0
+        topics_raw = getattr(args, "topics", "") or ""
+        entry["topics"] = [t.strip() for t in topics_raw.split(",") if t.strip()]
+
+    with open(OBSERVATIONS_FILE, "a") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    _trim_jsonl(OBSERVATIONS_FILE, 1000)
+
+    if entry.get("nothing_recorded"):
+        print("Logged: review_complete (nothing recorded)")
+    else:
+        print(f"Logged: review_complete ({entry['observations']} observations, topics: {entry.get('topics', [])})")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="autolearn",
@@ -992,6 +1038,17 @@ def main():
     srch_sessions.add_argument("terms", help="Search terms for session titles")
     srch_sub.add_parser("status", help="Show search index status")
 
+    log = sub.add_parser("log", help="Log structured events to observations.jsonl")
+    log_sub = log.add_subparsers(dest="subcommand")
+    log_rc = log_sub.add_parser("review-complete", help="Log review completion outcome")
+    log_rc.add_argument("--observations", type=int, default=0, help="Number of observations recorded")
+    log_rc.add_argument("--memory-updated", action="store_true", help="Memory was updated")
+    log_rc.add_argument("--user-profile-updated", action="store_true", help="User profile was updated")
+    log_rc.add_argument("--skills-created", type=int, default=0, help="Skills created count")
+    log_rc.add_argument("--skills-patched", type=int, default=0, help="Skills patched count")
+    log_rc.add_argument("--topics", default="", help="Comma-separated topics in the conversation")
+    log_rc.add_argument("--nothing", action="store_true", help="Nothing was recorded")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -1028,6 +1085,9 @@ def main():
             "query": cmd_search_query,
             "sessions": cmd_search_sessions,
             "status": cmd_search_status,
+        },
+        "log": {
+            "review-complete": cmd_log_review_complete,
         },
     }
 

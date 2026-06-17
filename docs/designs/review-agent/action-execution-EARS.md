@@ -4,7 +4,7 @@
 
 ## Observation Recording
 
-- [x] **RA-AE-001**: When the reviewer identifies a strong signal, the reviewer shall record it using `improve.py observe` with the rule phrased as an imperative.
+- [x] **RA-AE-001**: When the reviewer identifies a strong signal, the reviewer shall record it via the durable mechanisms (`autolearn.py memory add`, `user add`, or `skill create/patch`) with the rule phrased as an imperative. (The old `improve.py observe` store was removed 2026-06-16.)
 - [x] **RA-AE-002**: The reviewer shall assign a domain to each observation (e.g., python-tooling, git-practices, code-style) when identifiable.
 
 ## Memory Updates
@@ -25,7 +25,7 @@
 
 ## Safety Constraints
 
-- [x] **RA-AE-010**: The reviewer shall not modify project source code — only write to `~/.autolearn/` and `~/.agent-improvement/`.
+- [x] **RA-AE-010**: The reviewer shall not modify project source code — only write to `~/.autolearn/`.
 - [x] **RA-AE-011**: The reviewer shall never write secrets, API keys, or credentials to memory or skills.
 - [x] **RA-AE-012**: If unsure whether to record something, the reviewer shall lean toward not recording.
 
@@ -33,6 +33,10 @@
 
 - [x] **RA-AE-013**: After completing all actions, the reviewer shall output a summary with counts of observations recorded, memory updated (yes/no), skills created, skills patched, and user profile updated (yes/no).
 - [x] **RA-AE-014**: If nothing was found to record, the reviewer shall output "Autolearn review complete: nothing to record."
+
+## Outcome Logging
+
+- [x] **RA-AE-015**: After completing all actions (or determining nothing was recorded), the reviewer shall log a structured review-complete event to observations.jsonl via `autolearn.py log review-complete`, including topics found and actions taken.
 
 ## Related Documents
 

@@ -23,24 +23,37 @@ action by writing to files.
    "not like that", "I said Z"
 2. **Explicit preferences**: "I prefer X", "always do Y", "from now on, Z",
    "never do X again"
-3. **Frustration about repetition**: "again?", "I keep telling you",
+3. **Declarative workflow specifications**: statements where the user
+   describes how they want a recurring task or workflow to work — even
+   when no mistake was made. These are prospective specs, not corrections.
+   Examples:
+   - "they should be one post one week" (cadence spec)
+   - "LinkedIn should follow Bluesky schedule" (cross-channel sync rule)
+   - "we don't use global pip or pip3 anywhere here" (system-wide tool rule)
+   - "I want tests run before each commit" (workflow ordering)
+   - "the videos should be landscape, not vertical" (format spec)
+   - "use PEP 723 inline script metadata for any Python scripts" (convention)
+   These often use "should", "we use", "we don't", "I want", "needs to be"
+   — without explicit "I prefer" or "always" markers. Route these to
+   user-profile.md or memory.md depending on scope.
+4. **Frustration about repetition**: "again?", "I keep telling you",
    "every time", "I've said this before"
-4. **Explicit instruction to remember**: "remember this", "write that down",
+5. **Explicit instruction to remember**: "remember this", "write that down",
    "note this for next time"
-5. **Workarounds that worked**: non-obvious techniques, debugging paths,
+6. **Workarounds that worked**: non-obvious techniques, debugging paths,
    fixes that resolved an issue
 
 ### Moderate signals (act if seen more than once)
 
-6. **Tool choice patterns**: user consistently prefers one tool over another
-7. **Code style preferences**: naming, formatting, structure choices
-8. **Workflow patterns**: how the user approaches tasks, ordering preferences
-9. **Skill gaps**: moments where the agent struggled or didn't know something
+7. **Tool choice patterns**: user consistently prefers one tool over another
+8. **Code style preferences**: naming, formatting, structure choices
+9. **Workflow patterns**: how the user approaches tasks, ordering preferences
+10. **Skill gaps**: moments where the agent struggled or didn't know something
 
 ### Weak signals (record but don't create skills)
 
-10. **Contextual facts**: project-specific information worth remembering
-11. **Environment details**: tool versions, config quirks, platform specifics
+11. **Contextual facts**: project-specific information worth remembering
+12. **Environment details**: tool versions, config quirks, platform specifics
 
 ## What NOT to Capture
 
@@ -50,6 +63,21 @@ action by writing to files.
 - Environment-dependent failures (missing binaries, network issues)
 - Negative claims about tools ("X is broken") that could harden into refusals
 - Session-specific transient errors
+
+## Generalization Rule
+
+When the user states a rule with system-wide or project-wide scope ("anywhere",
+"on my system", "always", "every project", "we don't use"), **record the
+GENERAL rule, not the specific instance that triggered it.**
+
+Bad: "eric-video skill scripts should use uv run" (too narrow)
+Good: "Never use global pip or pip3. Use PEP 723 inline script metadata +
+`uv run` for all Python scripts."
+
+If the specific instance is already covered by a general rule the user
+stated, record the general one. If a narrow version of the rule already
+exists in memory and the user re-states it more broadly, replace the narrow
+entry with the general one (remove + re-add).
 
 ## Action Protocol
 
@@ -67,7 +95,22 @@ Also check for **system-level meta-patterns** before concluding "nothing to reco
 - Is there operational knowledge (how-to verify, testing steps) that would help
   future sessions debug similar issues?
 
-### Step 2: Search past sessions (before concluding "nothing to record")
+### Step 2: Coverage check (before concluding "nothing to record")
+
+After scanning for signals, re-read each **user** message in order. For each
+user message, ask yourself:
+
+- Did I identify a signal in this message? → record it
+- Is this a one-time task instruction or clarification? → consciously skip
+- Could this be a preference or workflow spec I initially overlooked? →
+  re-evaluate against the signal list, especially strong signal #3
+
+This step exists because **quiet preferences are easy to miss**. A user saying
+"they should be one post one week" is not loud like "don't do that" — but it
+is equally important to capture. Do not skip a user message just because it
+isn't a correction.
+
+### Step 3: Search past sessions (before concluding "nothing to record")
 
 Before concluding there is nothing to learn, search past conversations for
 related patterns. This catches recurring corrections that weren't promoted to
@@ -91,22 +134,21 @@ uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py search query
 **First-time setup:** If the search returns an error about the index not existing,
 run `autolearn.py search init` first, then retry the query.
 
-### Step 3: Record observations
+### Step 4: Record observations (via memory + user profile + skills)
 
-For user corrections and preferences, record them using improve.py:
+The old `improve.py observe` / `~/.agent-improvement/rules.yaml` observation store
+was removed on 2026-06-16 (along with the self-improving-agent skill, which shipped
+`improve.py`). There is no separate observation store anymore. Capture all corrections
+and preferences directly through the durable mechanisms below:
 
-```bash
-uv run $HOME/.agents/skills/self-improving-agent/scripts/improve.py observe "<rule>" --project <name> [--domain <domain>] [--context "<what happened>"]
-```
+- **Step 5** (memory.md): durable cross-session lessons
+- **Step 6** (user-profile.md): user communication/workflow preferences
+- **Step 7** (skills): repeatable workflows and procedures
 
-Rule phrasing: write as imperatives. "Use uv tool for Python CLI tools,
+When recording, phrase rules as imperatives. "Use uv tool for Python CLI tools,
 never pip3 install" not "user doesn't like pip".
 
-Domain choices: python-tooling, git-practices, security, code-style,
-error-handling, testing, documentation, communication, tool-usage,
-search-patterns, or a project-specific domain.
-
-### Step 4: Update memory
+### Step 5: Update memory
 
 **Before adding anything, check for semantic duplicates.** Run:
 
@@ -134,7 +176,18 @@ loaded into every session. Keep the total memory under 3000 characters.
 Good: "This project uses pytest with -x flag for fast feedback loops."
 Bad: "User said to use pytest on Tuesday afternoon during standup."
 
-### Step 5: Update user profile
+**Eviction caveat (verified in source):** `memory add` calls `_trim_entries`,
+which SILENTLY DROPS the OLDEST entries (front-of-list) whenever the total
+exceeds 3000 chars — it keeps newer entries and trims from the front. There is
+only ONE source: `memory list` reads the same `memory.md`; do not infer a
+separate "database of all entries ever added." Consequence: prefer
+`memory strengthen` (adds no characters) over `memory add` whenever a lesson is
+semantically close to an existing entry, to avoid evicting an unrelated older
+lesson. If `memory add` is unavoidable, first check the current char total
+(`memory list` prints it); if near 3000, `memory remove` a low-value entry
+deliberately to make room rather than letting the oldest fall off silently.
+
+### Step 6: Update user profile
 
 For user preferences about communication, workflow, or habits:
 
@@ -142,7 +195,20 @@ For user preferences about communication, workflow, or habits:
 uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py user add "<preference>"
 ```
 
-### Step 6: Create or patch skills
+**Eviction caveat (verified in source, 2026-06-14):** `user add` calls the
+SAME `_trim_entries` helper as `memory add`, with `MAX_USER_CHARS = 2000`.
+It SILENTLY DROPS the OLDEST entries (front-of-list) whenever the total exceeds
+2000 chars. Unlike `memory list`, `user list` does NOT print a char total, so
+you cannot tell you are near the limit until AFTER the damage is done.
+Consequence: before calling `user add`, run `user list` and estimate the byte
+total (`wc -c user-profile.md`); if already near 2000, either (a) condense an
+existing entry first, (b) skip if the preference is already in memory.md, or
+(c) `user remove` a low-value entry deliberately. NEVER assume `user add`
+appends. Data loss from this path is silent and unrecoverable — no backup is
+kept. (Encountered: a `user add` call evicted 4 of 6 existing entries in one
+shot; 2 were only in the profile and were restored from earlier session output.)
+
+### Step 7: Create or patch skills
 
 If you see a repeatable pattern, technique, or workflow that deserves
 its own skill:
@@ -166,18 +232,39 @@ Preference order for skill actions:
 Do not create a new skill for every minor observation. Skills are for
 repeatable procedures, not one-off facts.
 
+### Step 8: Log review outcome
+
+After completing all actions (or determining nothing was recorded), log the
+outcome to observations.jsonl. This creates an audit trail for detecting
+systematic gaps — e.g., "user expressed a preference in session A but reviewer
+captured nothing, same topic in session B."
+
+```bash
+# If you captured something:
+uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py log review-complete \
+  --observations <N> --memory-updated --user-profile-updated \
+  --skills-created <N> --skills-patched <N> --topics "<comma-separated topics>"
+
+# If nothing was recorded:
+uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py log review-complete --nothing
+```
+
+The `--topics` field is the most important — it should list the key subjects
+you found in the conversation (e.g., "pip,pep723,buffer-scheduling"), even if
+you decided not to record some of them. This enables future gap analysis.
+
 ## Safety Rules
 
-- Never modify project source code. Only write to `~/.autolearn/` and
-  `~/.agent-improvement/`.
+- Never modify project source code. Only write to `~/.autolearn/`.
 - Never write secrets, API keys, or credentials to memory or skills.
 - Never create more than 2 new skills per review.
 - Keep memory.md under 3000 characters. Remove old entries if needed.
 - Keep user-profile.md under 2000 characters.
 - If in doubt about whether to record something, consider the signal strength.
-  Strong signals (corrections, preferences, workarounds) should always be recorded.
-  Weak signals (contextual facts) can be skipped. System meta-patterns (cascade
-  loops, repeated failures) are moderate signals worth capturing.
+  Strong signals (corrections, preferences, declarative specs, workarounds) should
+  always be recorded. Weak signals (contextual facts) can be skipped. System
+  meta-patterns (cascade loops, repeated failures) are moderate signals worth
+  capturing.
 
 ## Review Output
 
@@ -190,6 +277,7 @@ Autolearn review complete:
 - Skills created: N
 - Skills patched: N
 - User profile updated: yes/no
+- Topics: <comma-separated>
 ```
 
 If nothing worth recording was found, output:

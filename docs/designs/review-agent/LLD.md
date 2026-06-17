@@ -92,21 +92,25 @@ The reviewer classifies conversation signals into three tiers:
 
 1. User corrections: "don't do X", "use Y instead", "that's wrong"
 2. Explicit preferences: "I prefer X", "always do Y", "from now on, Z"
-3. Frustration about repetition: "again?", "I keep telling you"
-4. Explicit instruction to remember: "remember this", "write that down"
-5. Workarounds that worked: non-obvious techniques that resolved an issue
+3. Declarative workflow specifications: statements where the user describes
+   how they want a recurring task to work, even without an explicit "I prefer"
+   marker — e.g., "they should be one post one week", "we don't use global pip
+   anywhere here", "LinkedIn should follow Bluesky schedule"
+4. Frustration about repetition: "again?", "I keep telling you"
+5. Explicit instruction to remember: "remember this", "write that down"
+6. Workarounds that worked: non-obvious techniques that resolved an issue
 
 ### Moderate Signals (act if seen more than once)
 
-6. Tool choice patterns
-7. Code style preferences
-8. Workflow patterns
-9. Skill gaps
+7. Tool choice patterns
+8. Code style preferences
+9. Workflow patterns
+10. Skill gaps
 
 ### Weak Signals (record but don't create skills)
 
-10. Contextual facts
-11. Environment details
+11. Contextual facts
+12. Environment details
 
 ### Excluded
 
@@ -122,28 +126,37 @@ The reviewer classifies conversation signals into three tiers:
 
 Read the conversation. For each message pair, check against signal list. Also check meta-patterns: review cascades, previous "nothing to record" conclusions followed by user pushback, operational debugging knowledge.
 
-### Step 2: Record Observations
+**Generalization rule:** When the user states a rule with system-wide or project-wide scope ("anywhere", "on my system", "always"), record the general rule, not the specific instance.
+
+**Coverage check:** Before concluding "nothing to record", re-read each user message and confirm each was either acted upon or consciously classified as below threshold. Quiet preferences (declarative specs without correction markers) are easy to miss — do not skip a user message solely because it isn't a correction.
+
+### Step 2: Search Past Sessions (before concluding "nothing to record")
+
+Search past conversations for related patterns that may not have been promoted to memory.
 
 ```bash
-uv run $HOME/.agents/skills/self-improving-agent/scripts/improve.py observe "<rule>" \
-  --project <name> [--domain <domain>] [--context "<what happened>"]
+uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py search query "<key terms>"
 ```
 
-Rules phrased as imperatives.
+### Step 3: Record Observations
 
-### Step 3: Update Memory
+The old `improve.py observe` / `~/.agent-improvement/` store was removed on 2026-06-16.
+Capture all corrections and preferences directly through the durable mechanisms below
+(Steps 4–6). Rules phrased as imperatives.
+
+### Step 4: Update Memory
 
 ```bash
 uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py memory add "<lesson>"
 ```
 
-### Step 4: Update User Profile
+### Step 5: Update User Profile
 
 ```bash
 uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py user add "<preference>"
 ```
 
-### Step 5: Create or Patch Skills
+### Step 6: Create or Patch Skills
 
 ```bash
 # New skill
@@ -155,9 +168,23 @@ uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py skill patch 
 
 Preference order: PATCH existing > ADD section to umbrella > CREATE new.
 
+### Step 7: Log Review Outcome
+
+```bash
+# If something was recorded:
+uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py log review-complete \
+  --observations <N> --memory-updated --user-profile-updated \
+  --skills-created <N> --skills-patched <N> --topics "<comma-separated>"
+
+# If nothing was recorded:
+uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py log review-complete --nothing
+```
+
+This creates an audit trail in observations.jsonl for detecting systematic capture gaps.
+
 ## Safety Rules
 
-- Never modify project source code (only write to `~/.autolearn/` and `~/.agent-improvement/`)
+- Never modify project source code (only write to `~/.autolearn/`)
 - Never write secrets, API keys, or credentials
 - Max 2 new skills per review
 - Keep memory.md under 3000 characters
@@ -191,8 +218,7 @@ Autolearn review complete: nothing to record.
 
 ## Dependencies
 
-- **autolearn.py**: CLI for memory, user profile, skill management
-- **improve.py** (external): Observation recording and escalation
+- **autolearn.py**: CLI for memory, user profile, skill management, search, and outcome logging
 - **autolearn-reviewer SKILL.md**: Instructions loaded at review time
 - **autolearn-curator SKILL.md**: Loaded by scheduled curator jobs (not by reviewer directly)
 

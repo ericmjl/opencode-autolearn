@@ -262,11 +262,20 @@ export const AutolearnPlugin = async (ctx) => {
     md += "## Instructions\n\n"
     md += 'Review the conversation below for learning opportunities.\nLoad the autolearn-reviewer skill with: skill({ name: "autolearn-reviewer" })\n\n'
     md += "Focus on:\n\n"
-    md += "1. User corrections (style, approach, tools)\n"
-    md += "2. User preferences expressed\n"
+    md += "1. User corrections (style, approach, tools) — \"don't do X\", \"use Y instead\"\n"
+    md += "2. User preferences AND declarative workflow specs — not just corrections.\n"
+    md += "   The user may describe how they want something done without a mistake\n"
+    md += "   being made first. Capture these too:\n"
+    md += "   - \"they should be one post one week\" (cadence spec)\n"
+    md += "   - \"we don't use global pip anywhere here\" (system-wide tool rule)\n"
+    md += "   - \"LinkedIn should follow Bluesky schedule\" (sync rule)\n"
+    md += "   - \"use PEP 723 inline metadata for Python scripts\" (convention)\n"
     md += "3. Workarounds or techniques that worked\n"
     md += "4. Skills that were wrong, incomplete, or outdated\n"
     md += "5. Repeated patterns worth capturing\n\n"
+    md += "IMPORTANT: Preferences are not always corrections. Scan every user message\n"
+    md += "for declarative specs (\"should be\", \"we use\", \"we don't\", \"I want\") even\n"
+    md += "when no error occurred. Record general rules, not narrow instances.\n\n"
     md += "## Conversation\n\n"
 
     for (const msg of messages) {
