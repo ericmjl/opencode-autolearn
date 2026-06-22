@@ -69,7 +69,13 @@ if plugin_entry not in plugins:
 if 'instructions' not in data:
     data['instructions'] = []
 instructions = data['instructions'] if isinstance(data['instructions'], list) else [data['instructions']]
-mem_entry = os.path.expanduser('~/.autolearn/memory.md')
+mem_entry = os.path.expanduser('~/.autolearn/personas/default/memory.md')
+# Also remove any stale flat-layout path from a previous install
+old_mem = os.path.expanduser('~/.autolearn/memory.md')
+if old_mem in instructions:
+    instructions = [i for i in instructions if i != old_mem]
+    data['instructions'] = instructions
+    changed = True
 if mem_entry not in instructions:
     instructions.append(mem_entry)
     data['instructions'] = instructions
@@ -125,7 +131,7 @@ OK=true
 [[ -f "$SKILLS_DIR/autolearn-reviewer/SKILL.md" ]] || { echo "  MISSING: skills/autolearn-reviewer"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn-curator/SKILL.md" ]] || { echo "  MISSING: skills/autolearn-curator"; OK=false; }
 [[ -f "$SKILLS_DIR/self-improving-agent/SKILL.md" ]] || { echo "  MISSING: skills/self-improving-agent"; OK=false; }
-[[ -f "$HOME/.autolearn/memory.md" ]] || { echo "  MISSING: ~/.autolearn/memory.md"; OK=false; }
+[[ -f "$HOME/.autolearn/personas/default/memory.md" ]] || { echo "  MISSING: ~/.autolearn/personas/default/memory.md"; OK=false; }
 
 echo ""
 if $OK; then
