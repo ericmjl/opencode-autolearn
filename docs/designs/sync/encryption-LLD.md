@@ -41,7 +41,7 @@ The keychain stores `master_key` under service name `autolearn-sync`. Password i
 
 ### Salt
 
-`.encryption_salt` in `~/.autolearn/` — 32 random bytes, generated on `sync login`. Same salt used on all machines (shared via first `sync push/pull`).
+`.encryption_salt` in `~/.autolearn/` — 32 random bytes, generated on `sync login`. The salt must be the same on all machines to derive the same master key. **Phase 1 requires manual copying** (`scp ~/.autolearn/.encryption_salt newmachine:~/.autolearn/`). Automatic salt bootstrap is deferred — see SYNC-ENC-004.
 
 ## Encryption Scheme
 
@@ -83,15 +83,15 @@ The keychain stores `master_key` under service name `autolearn-sync`. Password i
   "user_id": "sha256(api_key)",
   "persona_id": "uuid-v4",
   "file_key": "memory.md",
-  "ciphertext": "base64",
+  "ciphertext": "base64 (includes GCM tag appended)",
   "nonce": "base64-12-bytes",
-  "tag": "base64-16-bytes",
+  "tag": "",
   "machine_id": "hostname-fingerprint",
   "updated_at": 1717852800
 }
 ```
 
-File names are NOT encrypted (predictable, ~10 options). Persona names stay client-side only (server sees UUIDs).
+**Implementation note**: The `cryptography` library's `AESGCM.encrypt()` returns `ciphertext || tag` (tag is the last 16 bytes). The CLI sends `tag: ""` on the wire and embeds the real tag inside `ciphertext`. The server stores fields verbatim and is agnostic to this. File names are NOT encrypted (predictable, ~10 options). Persona names stay client-side only (server sees UUIDs).
 
 ## Key Management Commands
 

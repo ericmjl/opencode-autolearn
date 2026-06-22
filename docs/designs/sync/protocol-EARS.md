@@ -34,8 +34,8 @@
 
 ## Backend Conformance
 
-- [ ] **SYNC-PROTO-016**: The Convex backend and self-hosted backend shall implement the same API spec (push, pull, status, delete). _(partial — Fastify shipped; Convex HTTP Actions shim pending Phase 2)_
-- [ ] **SYNC-PROTO-017**: The CLI shall be backend-agnostic, requiring only a `server_url` and API key. _(partial — works with any conforming REST server; Convex transport not yet exercised)_
+- [x] **SYNC-PROTO-016**: The Convex backend and self-hosted backend shall implement the same API spec (push, pull, status, delete). _(both shipped: `sync-server/` Fastify + `sync-convex/` Convex HTTP Actions)_
+- [x] **SYNC-PROTO-017**: The CLI shall be backend-agnostic, requiring only a `server_url` and API key.
 
 ## Related Documents
 

@@ -2,7 +2,7 @@
  * Autolearn Plugin v2 - OpenCode Self-Improvement Engine
  *
  * Counts conversation turns and spawns a review subagent at thresholds.
- * Manages persistent memory at ~/.autolearn/memory.md.
+ * Manages persistent memory at ~/.autolearn/personas/default/memory.md.
  *
  * Environment variables:
  *   AUTOLEARN_HOME     - Base directory (default: ~/.autolearn)

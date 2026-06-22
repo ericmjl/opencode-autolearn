@@ -129,28 +129,34 @@ for each remote file:
 | Plugin: session start | Auto `sync pull` in background |
 | Plugin: after review completes | Auto `sync push` |
 | Curator run | Auto `sync push` after transitions |
-| `sync watch` | Long-lived process, pushes on file changes |
+| `sync watch` | _(deferred — not yet implemented)_ |
 
 ## Backend: Convex (Managed)
 
 ### Schema
 
+The shipped Convex schema (`sync-convex/convex/schema.ts`) uses two tables with snake_case field names (matching the wire format, avoiding a translation layer):
+
 ```typescript
-// convex/schema.ts
-defineSchema({
-  sync_store: defineTable({
-    userId: v.string(),
-    personaId: v.string(),
-    fileKey: v.string(),
-    ciphertext: v.string(),
-    nonce: v.string(),
-    tag: v.string(),
-    machineId: v.string(),
-    updatedAt: v.number(),
-  })
-    .index("by_user_persona", ["userId", "personaId"])
-    .index("by_user_persona_key", ["userId", "personaId", "fileKey"])
+// sync-convex/convex/schema.ts
+users: defineTable({
+  user_id: v.string(),
+  api_key_hash: v.string(),
+  created_at: v.number(),
+}).index("by_user_id", ["user_id"]),
+
+sync_store: defineTable({
+  user_id: v.string(),
+  persona_id: v.string(),
+  file_key: v.string(),
+  ciphertext: v.string(),
+  nonce: v.string(),
+  tag: v.string(),
+  machine_id: v.string(),
+  updated_at: v.number(),
 })
+  .index("by_user_persona", ["user_id", "persona_id"])
+  .index("by_user_persona_key", ["user_id", "persona_id", "file_key"]),
 ```
 
 ### Deployment

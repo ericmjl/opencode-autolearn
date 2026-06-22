@@ -36,7 +36,7 @@ Per the HLD, mixing work and personal knowledge creates noise. A work-specific C
 └── .persona_registry.json     # { name → uuid } mapping
 ```
 
-Backward compatibility: when no `--persona` flag is given, commands operate on `personas/default/`. Existing users see no change.
+Backward compatibility: when no `--persona` flag is given, commands operate on `personas/default/`. Existing flat-layout installs are migrated automatically — `_migrate_to_personas()` in `autolearn.py` and `migrateToPersonas()` in `plugin/autolearn.js` move top-level files into `personas/default/` on first run after update. The migration is idempotent and silent.
 
 ## Persona Registry
 
@@ -103,9 +103,11 @@ Default: `--persona default` (can be changed via `persona switch`).
 ```bash
 autolearn sync push --persona work
 autolearn sync pull --persona personal
-autolearn sync push                # pushes all active personas
-autolearn sync pull                # pulls all active personas
+autolearn sync push                # pushes the active/machine-default persona
+autolearn sync pull                # pulls the active/machine-default persona
 ```
+
+**Note**: `sync push` / `sync pull` without `--persona` currently operates on the active persona only. Pushing all sync-enabled personas in one command (SYNC-PER-012) is deferred.
 
 ## Plugin Integration
 
@@ -127,20 +129,21 @@ The plugin reads this file (or the `AUTOLEARN_PERSONA` env var) to determine whi
 
 **Recommendation**: Option A for multi-persona, Option B as fallback. The plugin checks `.autolearn-persona` first, then falls back to `persona switch` default, then falls back to `default`.
 
+**Implementation status**: Option A (`.autolearn-persona`) is deferred (SYNC-PER-014). The shipped plugin always operates on `personas/default/` — it does not yet read the machine-wide default from `.default_persona` or the project-level `.autolearn-persona` file. CLI commands honor `persona switch` and `--persona` correctly; the plugin will gain multi-persona awareness in a future iteration.
+
 ## OpenCode Config
 
-`opencode.json` instructions path is persona-aware:
+`opencode.json` instructions path points at the default persona's memory:
 
 ```json
 {
   "instructions": [
-    "~/.autolearn/personas/default/memory.md",
-    "~/.autolearn/personas/work/memory.md"
+    "~/.autolearn/personas/default/memory.md"
   ]
 }
 ```
 
-Only active personas' memory files are loaded. The plugin manages this list based on which personas are in use.
+Loading memory from multiple active personas (SYNC-PER-017) is deferred — the current `injectInstructions()` only adds the default persona's path.
 
 ## Sync Isolation
 
