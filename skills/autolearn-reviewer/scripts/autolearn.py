@@ -7,25 +7,40 @@ Commands:
   skill usage                        Show skill usage telemetry
   curator run/status                 Run skill consolidation and cleanup
   search init/query/sessions/status  FTS5 full-text search over past sessions
+  sync login/logout/export-key       E2E-encryption key management
+  sync push/pull/status              Cross-machine sync (default persona only)
   init                               Initialize the autolearn store
 """
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pyyaml", "python-slugify"]
+# dependencies = [
+#     "pyyaml",
+#     "python-slugify",
+#     "cryptography",
+#     "keyring",
+#     "requests",
+# ]
 # ///
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sqlite3
 import sys
+import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import requests
 import yaml
 from slugify import slugify as python_slugify
+
+# Make sync_crypto.py importable when run via uv run / pytest.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import sync_crypto as _sc
 
 # @spec KS-MEM-020
 DATA_HOME = Path(os.environ.get("AUTOLEARN_HOME", Path.home() / ".autolearn"))
@@ -975,6 +990,424 @@ def cmd_log_review_complete(args):
         print(f"Logged: review_complete ({entry['observations']} observations, topics: {entry.get('topics', [])})")
 
 
+# ===========================================================================
+# Sync (Phase 1: default persona only, flat layout)
+#
+# Implements docs/designs/sync/{protocol,encryption}-LLD.md + EARS.
+# The implicit "default" persona_id is derived deterministically from the
+# install salt so that two machines logged in with the same password+salt
+# derive the same persona_id and can sync. When Phase 3 adds the explicit
+# personas/{name}/ directory layout + persona registry, the registry can
+# adopt this deterministic value as the default persona's UUID without
+# breaking existing encrypted blobs.
+# ===========================================================================
+
+SYNC_CONFIG_FILE = DATA_HOME / "sync.yaml"
+SALT_FILE = DATA_HOME / ".encryption_salt"
+LAST_SYNC_FILE = DATA_HOME / ".last_sync.json"
+
+# Files synced for the default persona. skills/ is deferred to Phase 3
+# (it needs directory-walking + per-file encryption or a tar envelope).
+SYNC_FILES = [
+    "memory.md",
+    "user-profile.md",
+    "observations.jsonl",
+    "strengths.json",
+    "config.yaml",
+]
+
+DEFAULT_SERVER_URL = "http://localhost:3001"
+
+
+def _load_sync_config() -> dict:
+    if SYNC_CONFIG_FILE.exists():
+        try:
+            return yaml.safe_load(SYNC_CONFIG_FILE.read_text()) or {}
+        except Exception:
+            pass
+    return {}
+
+
+def _save_sync_config(config: dict) -> None:
+    _ensure_dirs()
+    SYNC_CONFIG_FILE.write_text(yaml.safe_dump(config, default_flow_style=False))
+
+
+def _load_last_sync() -> dict:
+    if LAST_SYNC_FILE.exists():
+        try:
+            return json.loads(LAST_SYNC_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_last_sync(data: dict) -> None:
+    _ensure_dirs()
+    LAST_SYNC_FILE.write_text(json.dumps(data, indent=2) + "\n")
+
+
+# @spec SYNC-PROTO-002
+def _get_api_key() -> str:
+    api_key = os.environ.get("AUTOLEARN_SYNC_API_KEY")
+    if not api_key:
+        raise SystemExit(
+            "AUTOLEARN_SYNC_API_KEY environment variable is not set.\n"
+            "Set it to the API key you chose when registering with the sync server."
+        )
+    return api_key
+
+
+def _get_server_url() -> str:
+    config = _load_sync_config()
+    return config.get("server_url", DEFAULT_SERVER_URL)
+
+
+# @spec SYNC-PROTO-001, SYNC-PROTO-014
+def _sync_request(method: str, path: str, *, body: dict | None = None,
+                  timeout: float = 30.0, allow_register: bool = False) -> requests.Response:
+    api_key = _get_api_key()
+    url = f"{_get_server_url().rstrip('/')}{path}"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        return requests.request(method, url, json=body, headers=headers, timeout=timeout)
+    except requests.RequestException as exc:
+        # @spec SYNC-PROTO-014
+        raise SystemExit(f"Sync server unreachable at {url}: {exc}") from exc
+
+
+def _ensure_registered(api_key: str) -> str:
+    """Return the user_id for api_key, registering if necessary.
+
+    Tries GET /sync/status first; on 401, attempts POST /sync/register.
+    Other non-2xx codes abort with a clear error.
+    """
+    url = f"{_get_server_url().rstrip('/')}/sync/status"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+    except requests.RequestException as exc:
+        raise SystemExit(f"Sync server unreachable at {url}: {exc}") from exc
+
+    if r.status_code == 200:
+        # Already registered. user_id = sha256(api_key).
+        return _sc.api_key_id(api_key)
+    if r.status_code == 401:
+        # Not registered yet (or wrong key). Try to register.
+        reg_url = f"{_get_server_url().rstrip('/')}/sync/register"
+        try:
+            reg = requests.post(reg_url, json={"api_key": api_key}, timeout=10)
+        except requests.RequestException as exc:
+            raise SystemExit(f"Sync server unreachable at {reg_url}: {exc}") from exc
+        if reg.status_code == 201:
+            return reg.json().get("user_id") or _sc.api_key_id(api_key)
+        if reg.status_code == 409:
+            raise SystemExit(
+                "API key already registered but authentication failed. "
+                "Check that AUTOLEARN_SYNC_API_KEY matches the key you first registered with."
+            )
+        if reg.status_code == 400:
+            raise SystemExit("API key too short (minimum 16 characters). Choose a longer key.")
+        raise SystemExit(f"Registration failed (HTTP {reg.status_code}): {reg.text}")
+    raise SystemExit(f"Unexpected response from server (HTTP {r.status_code}): {r.text}")
+
+
+def _get_master_key_or_prompt() -> bytes:
+    """Return the master key from the keychain, prompting as a fallback.
+
+    @spec SYNC-ENC-002, SYNC-ENC-003.
+    """
+    key = _sc.load_master_key()
+    if key is not None:
+        return key
+    # Fallback: no keychain entry. Prompt for the password and re-derive.
+    if not SALT_FILE.exists():
+        raise SystemExit(
+            "No master key in keychain and no salt file. Run `autolearn sync login` first."
+        )
+    salt = _sc.load_salt(SALT_FILE)
+    password = getpass.getpass("Master password (keychain locked): ")
+    return _sc.derive_master_key(password, salt)
+
+
+# @spec SYNC-ENC-001
+def cmd_sync_login(args):
+    """Derive master key from password, store in keychain, persist salt.
+
+    Also ensures the API key is registered with the server.
+    """
+    _ensure_dirs()
+
+    # 1. Resolve server_url
+    config = _load_sync_config()
+    if args.server_url:
+        config["server_url"] = args.server_url
+        _save_sync_config(config)
+    elif not config.get("server_url"):
+        server = input(f"Sync server URL [{DEFAULT_SERVER_URL}]: ").strip()
+        config["server_url"] = server or DEFAULT_SERVER_URL
+        _save_sync_config(config)
+
+    # 2. Ensure API key is registered (also validates connectivity)
+    api_key = _get_api_key()
+    user_id = _ensure_registered(api_key)
+    print(f"Authenticated to {_get_server_url()} (user_id: {user_id[:12]}...)")
+
+    # 3. Salt: load existing, or generate new on first login
+    if SALT_FILE.exists():
+        salt = _sc.load_salt(SALT_FILE)
+        print(f"Using existing salt ({SALT_FILE})")
+    else:
+        salt = _sc.generate_salt()
+        _sc.save_salt(SALT_FILE, salt)
+        print(f"Generated new salt ({SALT_FILE}, 32 bytes)")
+
+    # 4. Prompt for password and derive master key
+    password = getpass.getpass("Choose a master password: ")
+    confirm = getpass.getpass("Confirm master password: ")
+    if password != confirm:
+        raise SystemExit("Passwords do not match.")
+    if len(password) < 8:
+        raise SystemExit("Password must be at least 8 characters.")
+
+    master_key = _sc.derive_master_key(password, salt)
+
+    # 5. Store master key in keychain (or warn if unavailable)
+    if _sc.keychain_available():
+        _sc.store_master_key(master_key)
+        print(f"Master key stored in OS keychain (service: {_sc.KEYCHAIN_SERVICE})")
+    else:
+        # @spec SYNC-ENC-003
+        print(
+            "WARNING: OS keychain unavailable. You will be prompted for your "
+            "password on every sync operation. Install a Secret Service provider "
+            "(macOS Keychain works out of the box; Linux needs gnome-keyring or kwallet)."
+        )
+
+    persona_id = _sc.default_persona_id(salt)
+    print(f"\nSync login complete.")
+    print(f"  Server:    {_get_server_url()}")
+    print(f"  Persona:   default ({persona_id})")
+    print(f"  Machine:   {_sc.machine_id()}")
+    print(f"\nRun `autolearn sync push` to upload your store.")
+
+
+# @spec SYNC-ENC-011
+def cmd_sync_logout(args):
+    """Remove the master key from the OS keychain. Does not delete local data."""
+    removed = _sc.delete_master_key()
+    if removed:
+        print(f"Master key removed from OS keychain (service: {_sc.KEYCHAIN_SERVICE})")
+    else:
+        print("No master key found in OS keychain (nothing to remove).")
+    print("Local data is unchanged. Run `autolearn sync login` to re-add the key.")
+
+
+# @spec SYNC-ENC-012
+def cmd_sync_export_key(args):
+    """Print the master key as a base58 recovery string."""
+    master_key = _sc.load_master_key()
+    if master_key is None:
+        if not SALT_FILE.exists():
+            raise SystemExit(
+                "No master key in keychain and no salt file. Run `autolearn sync login` first."
+            )
+        salt = _sc.load_salt(SALT_FILE)
+        password = getpass.getpass("Master password (keychain locked): ")
+        master_key = _sc.derive_master_key(password, salt)
+    recovery = _sc.encode_recovery_key(master_key)
+    print("Recovery key (base58-encoded master key). Store this offline:")
+    print()
+    print(recovery)
+    print()
+    print("Anyone with this key can decrypt your synced data. Treat it like a password.")
+
+
+def _encrypt_local_file(master_key: bytes, persona_id: str, rel_path: str) -> dict | None:
+    """Read a local file, encrypt it, return the push record, or None if missing."""
+    file_path = DATA_HOME / rel_path
+    if not file_path.exists():
+        return None
+    plaintext = file_path.read_bytes()
+    persona_key = _sc.derive_persona_key(master_key, persona_id)
+    file_key = _sc.derive_file_key(persona_key, rel_path)
+    record = _sc.encrypt(file_key, plaintext)
+    record["key"] = rel_path
+    record["tag"] = ""  # cryptography's AESGCM embeds the tag in ciphertext
+    record["updated_at"] = int(file_path.stat().st_mtime)
+    return record
+
+
+# @spec SYNC-PROTO-004, SYNC-PROTO-005, SYNC-PROTO-006
+def cmd_sync_push(args):
+    """Encrypt all local files and upload them to the sync server."""
+    _ensure_dirs()
+    if not SALT_FILE.exists():
+        raise SystemExit("Not logged in. Run `autolearn sync login` first.")
+    salt = _sc.load_salt(SALT_FILE)
+    master_key = _get_master_key_or_prompt()
+    persona_id = _sc.default_persona_id(salt)
+    machine = _sc.machine_id()
+
+    files_payload = []
+    for rel_path in SYNC_FILES:
+        record = _encrypt_local_file(master_key, persona_id, rel_path)
+        if record is not None:
+            files_payload.append(record)
+
+    if not files_payload:
+        print("No local files to sync.")
+        return
+
+    print(f"Pushing {len(files_payload)} file(s) to {_get_server_url()}...")
+    resp = _sync_request("POST", "/sync/push", body={
+        "persona_id": persona_id,
+        "machine_id": machine,
+        "files": files_payload,
+    })
+
+    if resp.status_code != 200:
+        raise SystemExit(f"Push failed (HTTP {resp.status_code}): {resp.text}")
+
+    data = resp.json()
+    conflicts = data.get("conflicts", [])
+    if conflicts:
+        print(f"Pushed {len(files_payload)} file(s). {len(conflicts)} conflict(s):")
+        for c in conflicts:
+            print(f"  {c['key']}: remote is newer (updated_at {c['remote_updated_at']} from {c['remote_machine']})")
+        print("Run `autolearn sync pull` to merge remote changes first.")
+    else:
+        print(f"Pushed {len(files_payload)} file(s). No conflicts.")
+
+    _save_last_sync({"timestamp": int(time.time()), "persona_id": persona_id, "direction": "push"})
+
+
+def _merge_observations(local_text: str, remote_text: str) -> str:
+    """Union two observations.jsonl bodies, dedup by exact line, sort by timestamp.
+
+    @spec SYNC-PROTO-009.
+    """
+    local_lines = {ln for ln in local_text.splitlines() if ln.strip()}
+    remote_lines = {ln for ln in remote_text.splitlines() if ln.strip()}
+    union = local_lines | remote_lines
+
+    def _sort_key(line: str) -> str:
+        try:
+            ts = json.loads(line).get("timestamp", "")
+        except (json.JSONDecodeError, TypeError):
+            return ""
+        # Coerce to str so mixed numeric/string timestamps don't crash sorted().
+        return str(ts) if ts is not None else ""
+
+    sorted_lines = sorted(union, key=_sort_key)
+    return ("\n".join(sorted_lines) + "\n") if sorted_lines else ""
+
+
+# @spec SYNC-PROTO-007, SYNC-PROTO-008, SYNC-PROTO-009, SYNC-PROTO-010
+def cmd_sync_pull(args):
+    """Download encrypted blobs, decrypt locally, and merge."""
+    _ensure_dirs()
+    if not SALT_FILE.exists():
+        raise SystemExit("Not logged in. Run `autolearn sync login` first.")
+    salt = _sc.load_salt(SALT_FILE)
+    master_key = _get_master_key_or_prompt()
+    persona_id = _sc.default_persona_id(salt)
+
+    since = 0
+    if not args.full:
+        last = _load_last_sync()
+        since = last.get("timestamp", 0) - 1  # fudge by 1s to avoid boundary miss
+
+    print(f"Pulling from {_get_server_url()} (since={since})...")
+    resp = _sync_request("POST", "/sync/pull", body={
+        "persona_id": persona_id,
+        "since": since,
+    })
+
+    if resp.status_code != 200:
+        raise SystemExit(f"Pull failed (HTTP {resp.status_code}): {resp.text}")
+
+    files = resp.json().get("files", [])
+    if not files:
+        print("No new files to pull.")
+        return
+
+    persona_key = _sc.derive_persona_key(master_key, persona_id)
+    accepted = 0
+    merged = 0
+    skipped = 0
+    tampered = 0
+
+    for rec in files:
+        rel_path = rec["key"]
+        file_key = _sc.derive_file_key(persona_key, rel_path)
+        try:
+            remote_plaintext = _sc.decrypt(file_key, rec["nonce"], rec["ciphertext"])
+        except _sc.TamperError:
+            # @spec SYNC-ENC-010
+            print(f"  WARNING: tampering detected for {rel_path}, skipping")
+            tampered += 1
+            continue
+
+        local_path = DATA_HOME / rel_path
+        if not local_path.exists():
+            # @spec SYNC-PROTO-008
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(remote_plaintext)
+            accepted += 1
+            continue
+
+        # Merge strategy depends on file type.
+        if rel_path == "observations.jsonl":
+            # @spec SYNC-PROTO-009
+            local_text = local_path.read_text()
+            remote_text = remote_plaintext.decode("utf-8")
+            merged_text = _merge_observations(local_text, remote_text)
+            if merged_text != local_text:
+                local_path.write_text(merged_text)
+                merged += 1
+            else:
+                skipped += 1
+        else:
+            # @spec SYNC-PROTO-010
+            local_mtime = int(local_path.stat().st_mtime)
+            if rec["updated_at"] > local_mtime:
+                local_path.write_bytes(remote_plaintext)
+                accepted += 1
+            else:
+                skipped += 1
+
+    print(f"Pull complete: {accepted} accepted, {merged} merged, {skipped} kept local, {tampered} tampered.")
+
+    _save_last_sync({"timestamp": int(time.time()), "persona_id": persona_id, "direction": "pull"})
+
+
+# @spec SYNC-PROTO-015
+def cmd_sync_status(args):
+    """Show sync state across all personas on the server."""
+    resp = _sync_request("GET", "/sync/status")
+    if resp.status_code != 200:
+        raise SystemExit(f"Status failed (HTTP {resp.status_code}): {resp.text}")
+
+    data = resp.json()
+    personas = data.get("personas", [])
+    if not personas:
+        print("No synced personas yet. Run `autolearn sync push` to upload.")
+        return
+
+    for p in personas:
+        ts = p.get("last_sync")
+        ts_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "never"
+        machines = ", ".join(p.get("machines", [])) or "(none)"
+        print(f"  Persona {p['persona_id'][:8]}...: {p['files']} file(s), last sync {ts_str}, machines: {machines}")
+
+    last = _load_last_sync()
+    if last.get("timestamp"):
+        last_ts = datetime.fromtimestamp(last["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\nLocal last sync: {last_ts} ({last.get('direction', '?')})")
+    print(f"Machine ID: {_sc.machine_id()}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="autolearn",
@@ -1049,6 +1482,17 @@ def main():
     log_rc.add_argument("--topics", default="", help="Comma-separated topics in the conversation")
     log_rc.add_argument("--nothing", action="store_true", help="Nothing was recorded")
 
+    sync = sub.add_parser("sync", help="Cross-machine sync (E2E-encrypted)")
+    sync_sub = sync.add_subparsers(dest="subcommand")
+    sync_login = sync_sub.add_parser("login", help="Derive master key and store in keychain")
+    sync_login.add_argument("--server-url", help="Sync server URL (default: http://localhost:3001)")
+    sync_sub.add_parser("logout", help="Remove master key from keychain")
+    sync_sub.add_parser("export-key", help="Print base58 recovery key for offline backup")
+    sync_sub.add_parser("push", help="Encrypt and upload all local files")
+    sync_pull = sync_sub.add_parser("pull", help="Download, decrypt, and merge remote files")
+    sync_pull.add_argument("--full", action="store_true", help="Pull all files, ignoring last-sync timestamp")
+    sync_sub.add_parser("status", help="Show sync state on the server")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -1088,6 +1532,14 @@ def main():
         },
         "log": {
             "review-complete": cmd_log_review_complete,
+        },
+        "sync": {
+            "login": cmd_sync_login,
+            "logout": cmd_sync_logout,
+            "export-key": cmd_sync_export_key,
+            "push": cmd_sync_push,
+            "pull": cmd_sync_pull,
+            "status": cmd_sync_status,
         },
     }
 
