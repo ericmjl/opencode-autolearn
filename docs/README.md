@@ -14,16 +14,17 @@ Start with the [High-Level Design](./high-level-design.md) — it has a status c
 | Review Agent | [LLD](./designs/review-agent/LLD.md) | [conversation-evaluation](./designs/review-agent/conversation-evaluation-EARS.md), [action-execution](./designs/review-agent/action-execution-EARS.md) | `skills/autolearn-reviewer/SKILL.md` |
 | Session Search | [LLD](./designs/session-search/LLD.md) | — | `autolearn.py` (search) |
 | Behavioral Escalation | (covered in self-improving-agent SKILL) | — | `skills/self-improving-agent/SKILL.md`, `improve.py` |
+| Sync Encryption | [LLD](./designs/sync/encryption-LLD.md) | [EARS](./designs/sync/encryption-EARS.md) | `scripts/sync_crypto.py`, `autolearn.py` (sync) |
+| Sync Protocol | [LLD](./designs/sync/protocol-LLD.md) | [EARS](./designs/sync/protocol-EARS.md) | `autolearn.py` (sync), `sync-server/`, `sync-convex/`, `plugin/autolearn.js` |
+| Multi-Persona | [LLD](./designs/sync/persona-LLD.md) | [EARS](./designs/sync/persona-EARS.md) | `autolearn.py` (persona), `plugin/autolearn.js` |
 
-### Partial (Phase 1 shipped, Phase 2+ pending)
+### Deferred (designed, not yet implemented)
 
-| Design | LLD | EARS | Code | Status |
-|--------|-----|------|------|--------|
-| Sync Encryption | [LLD](./designs/sync/encryption-LLD.md) | [EARS](./designs/sync/encryption-EARS.md) | `scripts/sync_crypto.py`, `autolearn.py` (sync) | Crypto + key management shipped (login/logout/export-key). `rotate-key` deferred. |
-| Sync Protocol | [LLD](./designs/sync/protocol-LLD.md) | [EARS](./designs/sync/protocol-EARS.md) | `autolearn.py` (sync push/pull/status), `sync-server/` | Fastify+SQLite backend + CLI shipped. Convex backend, plugin auto-sync, interactive pull deferred. |
-| Multi-Persona | [LLD](./designs/sync/persona-LLD.md) | [EARS](./designs/sync/persona-EARS.md) | — | Planned. Phase 1 uses an implicit `default` persona derived from the install salt. |
-
-The data layout is currently flat under `~/.autolearn/` (not under `personas/default/`). Phase 1 sync treats this flat layout as the implicit default persona; the multi-persona directory migration is Phase 3.
+- `sync rotate-key` (SYNC-ENC-013) — re-encrypt all blobs with new password
+- `sync pull --interactive` (SYNC-PROTO-011) — per-file conflict resolution prompt
+- `sync push` all-personas iteration (SYNC-PER-012/013) — currently pushes active persona only
+- Project-level `.autolearn-persona` file (SYNC-PER-014) — project-specific persona mapping
+- Salt auto-bootstrap — Phase 1 requires manual `scp ~/.autolearn/.encryption_salt` to new machines
 
 ## Conventions
 
