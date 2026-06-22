@@ -20,9 +20,11 @@ OpenCode session
                                      │
                       ┌──────────────┼──────────────┐
                       │              │              │
-                  memory.md    user-profile.md   skills/
-                  (loaded      (preferences)    (symlinked to
-                   into every                    ~/.agents/skills/)
+                  personas/      personas/       personas/
+                  default/       default/        default/
+                  memory.md      user-profile.md skills/
+                  (loaded        (preferences)   (symlinked to
+                   into every                     ~/.agents/skills/)
                    session)
 ```
 
@@ -48,7 +50,7 @@ bash opencode-autolearn/install.sh
 1. Copies `plugin/autolearn.js` to `~/.config/opencode/plugins/`
 2. Copies `skills/autolearn-reviewer`, `skills/autolearn-curator`, and `skills/self-improving-agent` to `~/.agents/skills/`
 3. Patches `~/.config/opencode/opencode.json` to register the plugin, instructions, and reviewer agent
-4. Runs `autolearn.py init` to create `~/.autolearn/` with defaults
+4. Runs `autolearn.py init` to create `~/.autolearn/personas/default/` with defaults
 
 ### Verify
 
@@ -65,7 +67,7 @@ If you prefer to edit `~/.config/opencode/opencode.json` yourself, the installer
 ```json
 {
   "plugin": ["./plugins/autolearn.js"],
-  "instructions": ["~/.autolearn/memory.md"],
+  "instructions": ["~/.autolearn/personas/default/memory.md"],
   "agent": {
     "autolearn-reviewer": {
       "description": "Reviews past conversations for self-improvement opportunities",
@@ -90,7 +92,7 @@ If you prefer to edit `~/.config/opencode/opencode.json` yourself, the installer
 
 ## Configuration
 
-Config lives at `~/.autolearn/config.yaml`:
+Config lives at `~/.autolearn/personas/default/config.yaml`:
 
 ```yaml
 review_threshold: 5          # assistant turns between reviews
@@ -138,7 +140,24 @@ uv run ... autolearn.py search query "<terms>" \  # full-text search across mess
     [--limit N] [--context N] [--session ID] [--project NAME]
 uv run ... autolearn.py search sessions "<terms>" # search session titles
 uv run ... autolearn.py search status             # show index size and coverage
+
+# Cross-machine sync (E2E-encrypted, opt-in)
+uv run ... autolearn.py sync login [--server-url URL]  # derive master key, store in keychain
+uv run ... autolearn.py sync push                      # encrypt + upload all local files
+uv run ... autolearn.py sync pull [--full]             # download + decrypt + merge
+uv run ... autolearn.py sync status                    # show server-side sync state
+uv run ... autolearn.py sync export-key                # print base58 recovery key
+uv run ... autolearn.py sync logout                    # remove master key from keychain
+
+# Personas (isolated knowledge stores)
+uv run ... autolearn.py persona create <name> "<description>"
+uv run ... autolearn.py persona list                   # show all personas + UUIDs
+uv run ... autolearn.py persona switch <name>          # set machine-wide default
+uv run ... autolearn.py persona archive <name>         # mark read-only, disable sync
+uv run ... autolearn.py persona rename <old> <new>
 ```
+
+Most commands accept `--persona <name>` to operate on a specific persona (default: machine-wide default or `default`). The plugin auto-syncs on session start and after reviews when `AUTOLEARN_SYNC_API_KEY` is set — see [Privacy](#privacy) and [`docs/designs/sync/`](docs/designs/sync/).
 
 Run `search init` once (before your first query) to populate the index from OpenCode's session DB. The reviewer skill does this on demand; to pre-build it manually, run `search init` and re-run periodically (or pass `--full` for a complete rebuild).
 
@@ -167,35 +186,37 @@ See [`skills/self-improving-agent/SKILL.md`](skills/self-improving-agent/SKILL.m
 
 ```
 ~/.autolearn/
-├── config.yaml              # thresholds and flags
-├── memory.md                # persistent lessons (loaded into every session)
-├── user-profile.md          # user preferences
-├── observations.jsonl       # event log (auto-trimmed to 1000 lines)
-├── strengths.json           # reinforcement counters per memory entry
-├── reviews/                 # generated review markdown files
-│   ├── review-{timestamp}.md
-│   └── review-exit-{timestamp}.md
-├── review-failed-{ts}.md    # reviews that errored (kept for debugging)
-├── search.db                # FTS5 index over past OpenCode sessions
-├── bin/                     # wrapper scripts written by the plugin
-│   └── review-runner.sh
-├── debug.log                # verbose plugin output (when AUTOLEARN_DEBUG=1)
-├── skills/                  # agent-created skills (real location)
-│   ├── {skill-name}/
-│   │   └── SKILL.md
-│   ├── .archive/            # archived skills
-│   └── .usage.json          # skill usage telemetry
-└── .curator_state.json      # curator run history
+├── personas/
+│   └── default/               # default persona (no --persona flag)
+│       ├── config.yaml            # thresholds and flags
+│       ├── memory.md              # persistent lessons (loaded into every session)
+│       ├── user-profile.md        # user preferences
+│       ├── observations.jsonl     # event log (auto-trimmed to 1000 lines)
+│       ├── strengths.json         # reinforcement counters per memory entry
+│       ├── reviews/               # generated review markdown files
+│       ├── search.db              # FTS5 index over past OpenCode sessions
+│       ├── bin/                   # wrapper scripts (review-runner.sh)
+│       ├── skills/                # agent-created skills
+│       │   ├── {skill-name}/
+│       │   │   └── SKILL.md
+│       │   ├── .archive/
+│       │   └── .usage.json
+│       └── .curator_state.json
+├── sync.yaml                  # sync config (server URL) — created by `sync login`
+├── .encryption_salt           # per-installation salt for PBKDF2 key derivation
+├── .persona_registry.json     # { name → uuid, sync_enabled } mapping
+├── .default_persona           # machine-wide default persona name
+└── debug.log                  # verbose plugin output (when AUTOLEARN_DEBUG=1)
 
 ~/.agents/skills/
-├── autolearn-reviewer/      # installed skill (you copied this)
-├── autolearn-curator/       # installed skill (you copied this)
-├── self-improving-agent/    # installed skill (behavioral rule tracker)
-│   └── scripts/improve.py   # CLI for observe/escalate/stale
-└── {learned-skill} → ~/.autolearn/skills/{learned-skill}/  # symlinks
+├── autolearn-reviewer/        # installed skill (includes autolearn.py CLI)
+├── autolearn-curator/         # installed skill
+├── self-improving-agent/      # installed skill (behavioral rule tracker)
+│   └── scripts/improve.py     # CLI for observe/escalate/stale
+└── {learned-skill} → ~/.autolearn/personas/default/skills/{learned-skill}/  # symlinks
 
 ~/.agent-improvement/
-└── rules.yaml               # improve.py rule store (observations, counts, written_to)
+└── rules.yaml                 # improve.py rule store (observations, counts, written_to)
 ```
 
 ## Design docs
@@ -203,7 +224,7 @@ See [`skills/self-improving-agent/SKILL.md`](skills/self-improving-agent/SKILL.m
 Full design documentation lives in `docs/`:
 
 - [`docs/high-level-design.md`](docs/high-level-design.md) — architecture, decisions, risk matrix. Each feature and decision is marked `shipped`, `partial`, or `planned`.
-- [`docs/designs/`](docs/designs/) — 5 LLDs and 8 EARS specifications for shipped features (conversation monitoring, knowledge store, skill management, review agent, session search), plus 3 LLDs and 3 EARS for sync/multi-persona work (Phase 1 of sync shipped — see [`docs/README.md`](docs/README.md) for the status-indexed overview).
+- [`docs/designs/`](docs/designs/) — 8 LLDs and 11 EARS specifications covering all shipped features (conversation monitoring, knowledge store, skill management, review agent, session search, sync encryption, sync protocol, multi-persona). See [`docs/README.md`](docs/README.md) for the status-indexed overview.
 
 ## Running the curator on a schedule
 
@@ -238,7 +259,7 @@ Autolearn records conversation excerpts locally to learn from them. By default *
 
 - All data lives under `~/.autolearn/` and `~/.agent-improvement/`.
 - Messages are redacted of likely secrets (API keys, tokens, passwords) before buffering.
-- The plugin and core CLI do not make outbound network requests. Sync is opt-in and E2E-encrypted (Phase 1 shipped: `autolearn sync login/push/pull/status` + Fastify server in `sync-server/`) — see [`docs/high-level-design.md`](docs/high-level-design.md) Decisions 5–7.
+- The plugin and core CLI do not make outbound network requests. Sync is opt-in and E2E-encrypted: the plugin auto-pulls on session start and auto-pushes after reviews when `AUTOLEARN_SYNC_API_KEY` is set. Two interchangeable backends: **Fastify** (self-hosted, free, `sync-server/`) or **Convex** (managed, `sync-convex/`). See [`docs/high-level-design.md`](docs/high-level-design.md) Decisions 5–7.
 - To wipe everything: `rm -rf ~/.autolearn ~/.agent-improvement` and remove the plugin/instructions entries from `~/.config/opencode/opencode.json`.
 
 ## Uninstall
@@ -254,7 +275,7 @@ rm -rf ~/.agents/skills/autolearn-reviewer ~/.agents/skills/autolearn-curator ~/
 # rm -rf ~/.autolearn ~/.agent-improvement
 
 # Edit ~/.config/opencode/opencode.json and remove the
-# "autolearn.js" plugin entry, the "~/.autolearn/memory.md"
+# "autolearn.js" plugin entry, the "~/.autolearn/personas/default/memory.md"
 # instructions entry, and the "autolearn-reviewer" agent entry.
 ```
 

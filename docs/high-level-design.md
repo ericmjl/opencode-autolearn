@@ -1,13 +1,13 @@
 # OpenCode Autolearn - High-Level Design
 
 **Created**: 2026-06-05
-**Last updated**: 2026-06-14
+**Last updated**: 2026-06-21
 
 > **Status legend** — Feature Breakdown and Key Design Decisions mark each item as
 > `shipped` (implemented in `autolearn.py` / `autolearn.js`), `planned` (designed
-> but not yet implemented), or `partial`. Sync Phase 1 (E2E encryption + Fastify
-> server + default-persona push/pull) is shipped; multi-persona, Convex backend,
-> plugin auto-sync, rotate-key, and interactive conflict resolution remain planned.
+> but not yet implemented), or `partial`. Sync (E2E encryption, Fastify + Convex
+> backends, multi-persona, plugin auto-sync) is shipped. Deferred: `rotate-key`,
+> interactive conflict resolution, salt auto-bootstrap, project-level persona mapping.
 
 ## Problem Statement
 
@@ -19,7 +19,7 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 2. **Behavioral escalation** — Detect when a correction recurs across projects and escalate it into persistent agent instructions (AGENTS.md). _(shipped via `self-improving-agent/improve.py`)_
 3. **Skill evolution** — Allow the agent to create, patch, and retire its own skills based on observed patterns. _(shipped)_
 4. **Zero-friction operation** — Work as a background plugin that requires no user intervention during normal operation. _(shipped)_
-5. **Cross-machine sync** — Propagate learned knowledge between machines via an E2E-encrypted sync service. _(partial — Phase 1 shipped: AES-256-GCM crypto, sync CLI, Fastify+SQLite backend. Multi-persona + Convex backend + plugin auto-sync still planned. See Decisions 5–7 and `docs/designs/sync/`.)_
+5. **Cross-machine sync** — Propagate learned knowledge between machines via an E2E-encrypted sync service. _(shipped — AES-256-GCM crypto, sync CLI, Fastify + Convex backends, multi-persona, plugin auto-sync. See Decisions 5–7 and `docs/designs/sync/`.)_
 
 ## Non-Goals
 
@@ -121,7 +121,7 @@ Machine A                              Machine B
 - Node.js CLI: Would match the plugin language but the reviewer agent works better with Python for string processing and YAML manipulation.
 - Direct file writes from the skill: Fragile, no validation, no deduplication logic.
 
-### Decision 5: E2E-encrypted sync (zero-knowledge server) — _partial (Phase 1 shipped)_
+### Decision 5: E2E-encrypted sync (zero-knowledge server) — _shipped_
 
 **Choice**: Client-side AES-256-GCM encryption before syncing. The server stores only opaque ciphertext.
 
@@ -143,14 +143,14 @@ Machine A                              Machine B
 - Multiple autolearn installations: Duplication, each needs its own plugin config.
 - Single store with persona field: Leakage risk, complex filtering.
 
-### Decision 7: Backend-agnostic sync API (Convex or self-hosted) — _partial (Fastify shipped, Convex pending)_
+### Decision 7: Backend-agnostic sync API (Convex or self-hosted) — _shipped_
 
-**Choice**: A thin sync API spec (push/pull/status) that any backend can implement. Ships with a Convex backend and a self-hosted Fastify+SQLite backend.
+**Choice**: A thin sync API spec (push/pull/status) that any backend can implement. Ships with a Convex backend (managed, deployed under the project maintainer's account) and a self-hosted Fastify+SQLite backend (free, run on your own machine).
 
-**Rationale**: Users should not be locked into a specific hosting provider. The managed Convex service is convenient (deploy with `npx convex deploy`), but fully self-hosting should be equally easy (Docker image or bare Node process). The CLI is backend-agnostic — it only needs a URL and API key.
+**Rationale**: Users should not be locked into a specific hosting provider. The managed Convex service is convenient (no server to operate), but fully self-hosting should be equally easy (Docker image or bare bun process). The CLI is backend-agnostic — it only needs a URL and API key.
 
 **Alternatives considered**:
-- Convex only: Lock-in, users must create a Convex account.
+- Convex only: Lock-in, users must have a Convex account.
 - Generic S3/object store: No conflict detection, no per-file metadata, no auth built in.
 - Git-based sync: Merge conflicts on markdown bullet lists, requires git knowledge, no realtime.
 
@@ -160,50 +160,32 @@ Machine A                              Machine B
 
 ```
 ~/.autolearn/
-├── config.yaml                # Thresholds, intervals, flags
-├── memory.md                  # Persistent lessons loaded into every session
-├── user-profile.md            # User preferences and habits
-├── observations.jsonl         # Event log (append-only, trimmed to 1000 lines)
-├── strengths.json             # Reinforcement counters per memory entry
-├── reviews/                   # Generated review markdown files
-│   ├── review-{timestamp}.md        # threshold/idle-triggered reviews
-│   └── review-exit-{timestamp}.md   # exit-triggered reviews
-├── review-failed-{ts}.md      # Reviews that errored (kept for debugging)
-├── skills/                    # Agent-created skills
-│   ├── {skill-name}/
-│   │   └── SKILL.md
-│   ├── .archive/              # Archived skills
-│   └── .usage.json            # Skill usage telemetry
-├── search.db                  # FTS5 index over past OpenCode sessions
-├── bin/                       # Wrapper scripts written by the plugin
-│   └── review-runner.sh
-├── debug.log                  # Verbose plugin output (when AUTOLEARN_DEBUG=1)
-└── .curator_state.json        # Curator run history
-```
-
-### Planned (when sync/multi-persona ship)
-
-The flat layout above moves under `personas/{name}/`:
-
-```
-~/.autolearn/
 ├── personas/
-│   └── default/               ← no --persona flag = "default"
-│       ├── config.yaml
-│       ├── memory.md
-│       ├── user-profile.md
-│       ├── observations.jsonl
-│       ├── strengths.json
-│       ├── reviews/
-│       ├── skills/
+│   └── default/               ← no --persona flag = machine default
+│       ├── config.yaml            # Thresholds, intervals, flags
+│       ├── memory.md              # Persistent lessons loaded into every session
+│       ├── user-profile.md        # User preferences and habits
+│       ├── observations.jsonl     # Event log (append-only, trimmed to 1000 lines)
+│       ├── strengths.json         # Reinforcement counters per memory entry
+│       ├── reviews/               # Generated review markdown files
+│       │   ├── review-{timestamp}.md
+│       │   └── review-exit-{timestamp}.md
+│       ├── skills/                # Agent-created skills
 │       │   ├── {skill-name}/
 │       │   │   └── SKILL.md
 │       │   ├── .archive/
 │       │   └── .usage.json
-│       └── .curator_state.json
-├── sync.yaml                  # Sync config (server URL, machine ID, active personas)
-└── .encryption_salt           # Per-installation salt for key derivation
+│       ├── search.db              # FTS5 index over past OpenCode sessions
+│       ├── bin/                   # Wrapper scripts (review-runner.sh)
+│       └── .curator_state.json    # Curator run history
+├── sync.yaml                  # Sync config (server URL, machine ID)
+├── .encryption_salt           # Per-installation salt for key derivation
+├── .persona_registry.json     # { name → uuid, sync_enabled } mapping
+├── .default_persona           # Machine-wide default persona name
+└── debug.log                  # Verbose plugin output (when AUTOLEARN_DEBUG=1)
 ```
+
+Existing flat-layout installs are migrated to `personas/default/` automatically on first run after update (by both `autolearn.py` and `plugin/autolearn.js`).
 
 ## Feature Breakdown
 
@@ -245,9 +227,6 @@ The flat layout above moves under `personas/{name}/`:
 - [Skill Management LLD](./designs/skill-management/LLD.md) (+ 2 EARS: skill-crud, skill-lifecycle)
 - [Review Agent LLD](./designs/review-agent/LLD.md) (+ 2 EARS: conversation-evaluation, action-execution)
 - [Session Search LLD](./designs/session-search/LLD.md)
-
-### Planned (designs describe target state, not current code)
-
 - [Sync Encryption LLD](./designs/sync/encryption-LLD.md) (+ EARS)
 - [Sync Protocol LLD](./designs/sync/protocol-LLD.md) (+ EARS)
 - [Multi-Persona LLD](./designs/sync/persona-LLD.md) (+ EARS)
