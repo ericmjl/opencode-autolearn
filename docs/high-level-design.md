@@ -132,7 +132,7 @@ Machine A                              Machine B
 - Per-file symmetric keys without key hierarchy: Simpler but no isolation between personas.
 - Asymmetric encryption (public key): Overkill for single-user data, adds complexity.
 
-### Decision 6: Multi-persona knowledge stores — _planned_
+### Decision 6: Multi-persona knowledge stores — _shipped_
 
 **Choice**: Each persona is an isolated subdirectory under `~/.autolearn/personas/{name}/` with its own complete set of files, synced independently.
 
@@ -217,9 +217,9 @@ The flat layout above moves under `personas/{name}/`:
 | Review Agent | shipped | Examine conversations, extract learnings | autolearn-reviewer SKILL.md |
 | Session Search | shipped | FTS5 full-text search over past OpenCode conversations | autolearn.py, search.db |
 | Behavioral Escalation | shipped | Cross-project rule tracking and AGENTS.md writes | self-improving-agent/improve.py |
-| E2E-Encrypted Sync | partial | Client-side AES-256-GCM, zero-knowledge server. Phase 1 ships crypto, CLI (`sync login/push/pull/status`), Fastify backend. rotate-key + interactive pull deferred. | `autolearn.py` (sync), `sync-server/` |
-| Multi-Persona | planned | Isolated knowledge stores per context (work/personal/OSS) | autolearn.py |
-| Backend-Agnostic Sync | partial | Fastify+SQLite shipped (uses `bun:sqlite`). Convex HTTP Actions shim planned for Phase 2. | `sync-server/` |
+| E2E-Encrypted Sync | shipped | Client-side AES-256-GCM, zero-knowledge server. Crypto, CLI (sync login/push/pull/status/export-key), plugin auto-sync. rotate-key + interactive pull deferred. | `autolearn.py` (sync), `sync-server/`, `sync-convex/`, `plugin/autolearn.js` |
+| Multi-Persona | shipped | Isolated knowledge stores per context (work/personal/OSS). Flat-to-personas migration is automatic and backward-compatible. | autolearn.py (persona) |
+| Backend-Agnostic Sync | shipped | Fastify+SQLite (bun:sqlite) and Convex HTTP Actions both implement the same REST API. CLI is backend-agnostic. | `sync-server/`, `sync-convex/` |
 
 ## Risks and Mitigations
 

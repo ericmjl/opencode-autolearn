@@ -17,6 +17,8 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "fs"
@@ -24,15 +26,20 @@ import { homedir } from "os"
 import { join } from "path"
 
 const AL_HOME = process.env.AUTOLEARN_HOME || join(homedir(), ".autolearn")
-const CONFIG_FILE = join(AL_HOME, "config.yaml")
-const MEMORY_FILE = join(AL_HOME, "memory.md")
-const USER_FILE = join(AL_HOME, "user-profile.md")
-const OBS_FILE = join(AL_HOME, "observations.jsonl")
-const BIN_DIR = join(AL_HOME, "bin")
-const REVIEWS_DIR = join(AL_HOME, "reviews")
-const SKILLS_DIR = join(AL_HOME, "skills")
+const PERSONAS_DIR = join(AL_HOME, "personas")
+const DEFAULT_PERSONA_DIR = join(PERSONAS_DIR, "default")
+const CONFIG_FILE = join(DEFAULT_PERSONA_DIR, "config.yaml")
+const MEMORY_FILE = join(DEFAULT_PERSONA_DIR, "memory.md")
+const USER_FILE = join(DEFAULT_PERSONA_DIR, "user-profile.md")
+const OBS_FILE = join(DEFAULT_PERSONA_DIR, "observations.jsonl")
+const BIN_DIR = join(DEFAULT_PERSONA_DIR, "bin")
+const REVIEWS_DIR = join(DEFAULT_PERSONA_DIR, "reviews")
+const SKILLS_DIR = join(DEFAULT_PERSONA_DIR, "skills")
 const ARCHIVE_DIR = join(SKILLS_DIR, ".archive")
 const WRAPPER_SCRIPT = join(BIN_DIR, "review-runner.sh")
+const SYNC_CONFIG_FILE = join(AL_HOME, "sync.yaml")
+const SALT_FILE = join(AL_HOME, ".encryption_salt")
+const AUTOLEARN_CLI = join(homedir(), ".agents", "skills", "autolearn-reviewer", "scripts", "autolearn.py")
 const THRESHOLD_DEFAULT = 5
 const STALE_DAYS_DEFAULT = 30
 const IDLE_COOLDOWN_MS = 300000
@@ -58,6 +65,8 @@ function redact(str) {
 
 // @spec KS-MEM-001 (ensures directory tree exists before any operation)
 function ensureStore() {
+  migrateToPersonas()
+  mkdirSync(DEFAULT_PERSONA_DIR, { recursive: true })
   mkdirSync(BIN_DIR, { recursive: true })
   mkdirSync(SKILLS_DIR, { recursive: true })
   mkdirSync(ARCHIVE_DIR, { recursive: true })
@@ -72,6 +81,62 @@ function ensureStore() {
     writeFileSync(CONFIG_FILE, `review_threshold: ${THRESHOLD_DEFAULT}\nsession_review_on_idle: true\nmax_conversation_buffer: 50\ncurator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\n`)
   }
   ensureWrapper()
+}
+
+// Phase 3 migration: move flat ~/.autolearn/ files to personas/default/
+function migrateToPersonas() {
+  if (existsSync(PERSONAS_DIR)) return
+  const flatFiles = ["memory.md", "user-profile.md", "config.yaml", "observations.jsonl", "strengths.json", ".curator_state.json"]
+  const hasFlat = flatFiles.some(f => { try { return existsSync(join(AL_HOME, f)) } catch { return false } })
+  const hasSkills = existsSync(join(AL_HOME, "skills"))
+  if (!hasFlat && !hasSkills) return
+
+  mkdirSync(DEFAULT_PERSONA_DIR, { recursive: true })
+  for (const f of flatFiles) {
+    const src = join(AL_HOME, f)
+    try {
+      if (existsSync(src) && !statSync(src).isDirectory()) {
+        renameSync(src, join(DEFAULT_PERSONA_DIR, f))
+      }
+    } catch {}
+  }
+  for (const d of ["skills", "reviews", "bin"]) {
+    const srcDir = join(AL_HOME, d)
+    try {
+      if (existsSync(srcDir) && statSync(srcDir).isDirectory() && !existsSync(join(DEFAULT_PERSONA_DIR, d))) {
+        renameSync(srcDir, join(DEFAULT_PERSONA_DIR, d))
+      }
+    } catch {}
+  }
+  dbg("MIGRATED flat layout to", DEFAULT_PERSONA_DIR)
+}
+
+// @spec SYNC-PROTO-012, SYNC-PROTO-013
+function syncBackground(command) {
+  if (!process.env.AUTOLEARN_SYNC_API_KEY) return
+  if (!existsSync(SYNC_CONFIG_FILE)) return
+  if (!existsSync(SALT_FILE)) return
+  if (!existsSync(AUTOLEARN_CLI)) return
+
+  // Honor sync_on_start / sync_after_review config flags
+  try {
+    const syncYaml = readFileSync(SYNC_CONFIG_FILE, "utf-8")
+    if (command === "pull" && /sync_on_start:\s*false/.test(syncYaml)) return
+    if (command === "push" && /sync_after_review:\s*false/.test(syncYaml)) return
+  } catch {}
+
+  try {
+    const proc = Bun.spawn(["uv", "run", AUTOLEARN_CLI, "sync", command], {
+      stdout: "ignore",
+      stderr: "ignore",
+      detached: true,
+      env: { ...process.env },
+    })
+    proc.ref()
+    dbg(`SYNC ${command} spawned in background`)
+  } catch (err) {
+    dbg(`SYNC ${command} failed to spawn:`, err.message)
+  }
 }
 
 const WRAPPER_CONTENT = `#!/bin/sh
@@ -124,8 +189,18 @@ function injectInstructions() {
     const raw = readFileSync(configPath, "utf-8")
     const data = JSON.parse(raw)
     if (!data.instructions) data.instructions = []
+
+    // Remove old flat-layout memory path if present (Phase 3 migration)
+    const oldMemoryFile = join(AL_HOME, "memory.md")
+    const hadOld = data.instructions.includes(oldMemoryFile)
+    if (hadOld) {
+      data.instructions = data.instructions.filter(p => p !== oldMemoryFile)
+    }
+
     if (!data.instructions.includes(MEMORY_FILE)) {
       data.instructions.push(MEMORY_FILE)
+      writeFileSync(configPath, JSON.stringify(data, null, 2) + "\n")
+    } else if (hadOld) {
       writeFileSync(configPath, JSON.stringify(data, null, 2) + "\n")
     }
   } catch (err) {
@@ -213,6 +288,9 @@ export const AutolearnPlugin = async (ctx) => {
 
       // @spec CM-RS-014
       cleanStaleReviews()
+
+      // @spec SYNC-PROTO-013
+      syncBackground("push")
     } catch (err) {
       // @spec CM-RS-011, CM-RS-012
       dbg("REVIEW SPAWN FAILED", err.message)
@@ -374,6 +452,8 @@ export const AutolearnPlugin = async (ctx) => {
             const info = props.info || {}
             currentSessionId = info.id || props.sessionID
             dbg("SESSION CREATED", currentSessionId)
+            // @spec SYNC-PROTO-012
+            syncBackground("pull")
             break
           }
 
