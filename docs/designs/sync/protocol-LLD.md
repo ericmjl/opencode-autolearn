@@ -168,7 +168,7 @@ Convex free tier: 100K reads/day, 10K writes/day. Personal use is < 100 writes/d
 ### Stack
 
 - **Fastify** HTTP server
-- **better-sqlite3** for storage
+- `bun:sqlite` for storage (bun's built-in SQLite; originally specified as `better-sqlite3` but bun has a hard name-based blocklist for it — see [oven-sh/bun#4290](https://github.com/oven-sh/bun/issues/4290). `bun:sqlite` is API-compatible: `prepare/get/all/run/exec` all match. Pragmas are set via `db.exec("PRAGMA ...")` rather than `.pragma()`.)
 - **bcrypt** for API key hashing
 
 ### Database schema
@@ -226,6 +226,20 @@ API key via `AUTOLEARN_SYNC_API_KEY` env var (never stored in config file).
 2. **First machine setup**: `sync pull` returns empty → no files to decrypt → normal.
 3. **Large number of machines**: Pull returns files from all machines; last-write-wins picks the latest.
 4. **Clock skew**: `updated_at` is server-assigned on push, not client-reported, to prevent skew issues.
+
+## Implementation Deviations (Phase 1)
+
+Documented divergences between this spec and the shipped Phase 1 implementation, recorded for traceability:
+
+1. **`POST /sync/register` added** (not in the original API spec above). The LLD specifies bcrypt hashing (SYNC-PROTO-003) but never specified *how* a user obtains an API key. The register endpoint fills this gap: `POST /sync/register { "api_key": "..." }` creates a `users` row with `user_id = sha256(api_key)` and `api_key_hash = bcrypt(api_key)`. Returns 201 on success, 409 on duplicate, 400 if api_key < 16 chars. This endpoint is unauthenticated.
+
+2. **Client-sent `updated_at`** (departs from Edge Case 4 above). Edge Case 4 says "updated_at is server-assigned on push, not client-reported," but the Push request body on lines 27–35 shows it as client-sent. The shipped implementation uses **client-sent**: the CLI sends `int(file.stat().st_mtime)` and the server stores it verbatim. This matches the request shape and keeps the server stateless w.r.t. client clocks.
+
+3. **`bun:sqlite` instead of `better-sqlite3`** (see Stack section above). bun has a hard name-based blocklist for `better-sqlite3` ([oven-sh/bun#4290](https://github.com/oven-sh/bun/issues/4290)). `bun:sqlite` is built-in and API-compatible (`prepare/get/all/run/exec`); pragmas are set via `db.exec("PRAGMA ...")` rather than `.pragma()`.
+
+4. **bcrypt verification cache**. The server caches successful `bcrypt.compare` results in a per-process `Map` keyed by `user_id + ":" + sha256(api_key)`. bcrypt is intentionally slow (~100ms at cost 10); without caching every authenticated request would pay that cost. Only positive results are cached; failures always fall through to bcrypt. Tunable via `AUTOLEARN_BCRYPT_COST`.
+
+5. **`GET /health` added** (unauthenticated). Returns `{ ok: true }`. Used by Docker `HEALTHCHECK` and by the CLI's `_wait_for_health` test helper.
 
 ## Related Documents
 

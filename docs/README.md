@@ -15,15 +15,15 @@ Start with the [High-Level Design](./high-level-design.md) — it has a status c
 | Session Search | [LLD](./designs/session-search/LLD.md) | — | `autolearn.py` (search) |
 | Behavioral Escalation | (covered in self-improving-agent SKILL) | — | `skills/self-improving-agent/SKILL.md`, `improve.py` |
 
-### Planned (designed, not yet implemented)
+### Partial (Phase 1 shipped, Phase 2+ pending)
 
-| Design | LLD | EARS |
-|--------|-----|------|
-| Sync Encryption | [LLD](./designs/sync/encryption-LLD.md) | [EARS](./designs/sync/encryption-EARS.md) |
-| Sync Protocol | [LLD](./designs/sync/protocol-LLD.md) | [EARS](./designs/sync/protocol-EARS.md) |
-| Multi-Persona | [LLD](./designs/sync/persona-LLD.md) | [EARS](./designs/sync/persona-EARS.md) |
+| Design | LLD | EARS | Code | Status |
+|--------|-----|------|------|--------|
+| Sync Encryption | [LLD](./designs/sync/encryption-LLD.md) | [EARS](./designs/sync/encryption-EARS.md) | `scripts/sync_crypto.py`, `autolearn.py` (sync) | Crypto + key management shipped (login/logout/export-key). `rotate-key` deferred. |
+| Sync Protocol | [LLD](./designs/sync/protocol-LLD.md) | [EARS](./designs/sync/protocol-EARS.md) | `autolearn.py` (sync push/pull/status), `sync-server/` | Fastify+SQLite backend + CLI shipped. Convex backend, plugin auto-sync, interactive pull deferred. |
+| Multi-Persona | [LLD](./designs/sync/persona-LLD.md) | [EARS](./designs/sync/persona-EARS.md) | — | Planned. Phase 1 uses an implicit `default` persona derived from the install salt. |
 
-The sync/persona LLDs and EARS describe the target design. Until they ship, the data layout is flat under `~/.autolearn/` (not under `personas/default/`) and there is no `sync` CLI subcommand.
+The data layout is currently flat under `~/.autolearn/` (not under `personas/default/`). Phase 1 sync treats this flat layout as the implicit default persona; the multi-persona directory migration is Phase 3.
 
 ## Conventions
 
