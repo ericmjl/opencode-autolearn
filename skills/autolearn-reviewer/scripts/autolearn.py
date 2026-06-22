@@ -31,6 +31,7 @@ import os
 import sqlite3
 import sys
 import time
+import uuid as uuid_mod
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -44,29 +45,165 @@ import sync_crypto as _sc
 
 # @spec KS-MEM-020
 DATA_HOME = Path(os.environ.get("AUTOLEARN_HOME", Path.home() / ".autolearn"))
-MEMORY_FILE = DATA_HOME / "memory.md"
-USER_FILE = DATA_HOME / "user-profile.md"
-CONFIG_FILE = DATA_HOME / "config.yaml"
-SKILLS_DIR = DATA_HOME / "skills"
+
+# --- Persona-aware directory layout (Phase 3) ---
+# @spec SYNC-PER-006, SYNC-PER-007
+PERSONAS_DIR = DATA_HOME / "personas"
+REGISTRY_FILE = DATA_HOME / ".persona_registry.json"
+ACTIVE_PERSONA = "default"
+ACTIVE_PERSONA_DIR = PERSONAS_DIR / ACTIVE_PERSONA
+
+# File paths for the active persona. Reassigned by _set_persona().
+# @spec SYNC-PER-008
+MEMORY_FILE = ACTIVE_PERSONA_DIR / "memory.md"
+USER_FILE = ACTIVE_PERSONA_DIR / "user-profile.md"
+CONFIG_FILE = ACTIVE_PERSONA_DIR / "config.yaml"
+SKILLS_DIR = ACTIVE_PERSONA_DIR / "skills"
 ARCHIVE_DIR = SKILLS_DIR / ".archive"
 USAGE_FILE = SKILLS_DIR / ".usage.json"
-CURATOR_STATE_FILE = DATA_HOME / ".curator_state.json"
-OBSERVATIONS_FILE = DATA_HOME / "observations.jsonl"
-STRENGTHS_FILE = DATA_HOME / "strengths.json"
+CURATOR_STATE_FILE = ACTIVE_PERSONA_DIR / ".curator_state.json"
+OBSERVATIONS_FILE = ACTIVE_PERSONA_DIR / "observations.jsonl"
+STRENGTHS_FILE = ACTIVE_PERSONA_DIR / "strengths.json"
 AGENTS_SKILLS_DIR = Path(os.environ.get("AGENTS_SKILLS_DIR", Path.home() / ".agents" / "skills"))
 
 MAX_MEMORY_CHARS = 3000
 MAX_USER_CHARS = 2000
 
 OPENCODE_DB = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
-SEARCH_DB = DATA_HOME / "search.db"
+SEARCH_DB = ACTIVE_PERSONA_DIR / "search.db"
+
+# Sync config and salt are shared across personas (not persona-specific).
+SYNC_CONFIG_FILE = DATA_HOME / "sync.yaml"
+SALT_FILE = DATA_HOME / ".encryption_salt"
+
+
+# @spec SYNC-PER-006
+def _set_persona(name: str) -> None:
+    """Reassign all module-level file paths to point at personas/<name>/."""
+    global ACTIVE_PERSONA, ACTIVE_PERSONA_DIR
+    global MEMORY_FILE, USER_FILE, CONFIG_FILE, SKILLS_DIR, ARCHIVE_DIR
+    global USAGE_FILE, CURATOR_STATE_FILE, OBSERVATIONS_FILE, STRENGTHS_FILE
+    global SEARCH_DB
+    ACTIVE_PERSONA = name
+    ACTIVE_PERSONA_DIR = PERSONAS_DIR / name
+    MEMORY_FILE = ACTIVE_PERSONA_DIR / "memory.md"
+    USER_FILE = ACTIVE_PERSONA_DIR / "user-profile.md"
+    CONFIG_FILE = ACTIVE_PERSONA_DIR / "config.yaml"
+    SKILLS_DIR = ACTIVE_PERSONA_DIR / "skills"
+    ARCHIVE_DIR = SKILLS_DIR / ".archive"
+    USAGE_FILE = SKILLS_DIR / ".usage.json"
+    CURATOR_STATE_FILE = ACTIVE_PERSONA_DIR / ".curator_state.json"
+    OBSERVATIONS_FILE = ACTIVE_PERSONA_DIR / "observations.jsonl"
+    STRENGTHS_FILE = ACTIVE_PERSONA_DIR / "strengths.json"
+    SEARCH_DB = ACTIVE_PERSONA_DIR / "search.db"
 
 
 # @spec KS-MEM-001
 def _ensure_dirs():
     DATA_HOME.mkdir(parents=True, exist_ok=True)
+    _migrate_to_personas()
+    _init_registry()
+    ACTIVE_PERSONA_DIR.mkdir(parents=True, exist_ok=True)
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# --- Persona migration + registry ---
+
+_FLAT_FILES = [
+    "memory.md", "user-profile.md", "config.yaml", "observations.jsonl",
+    "strengths.json", "search.db", ".curator_state.json",
+]
+
+
+def _migrate_to_personas() -> None:
+    """One-time migration from flat ~/.autolearn/ to personas/default/.
+
+    Idempotent: skips if personas/ already exists.
+    """
+    if PERSONAS_DIR.exists():
+        return
+    has_flat = any((DATA_HOME / f).exists() for f in _FLAT_FILES)
+    if not has_flat and not (DATA_HOME / "skills").exists():
+        return  # new install, nothing to migrate
+
+    default_dir = PERSONAS_DIR / "default"
+    default_dir.mkdir(parents=True, exist_ok=True)
+
+    for f in _FLAT_FILES:
+        src = DATA_HOME / f
+        if src.exists() and not src.is_dir():
+            try:
+                src.rename(default_dir / f)
+            except OSError:
+                pass
+
+    for d in ("skills", "reviews", "bin"):
+        src_dir = DATA_HOME / d
+        if src_dir.exists() and src_dir.is_dir() and not (default_dir / d).exists():
+            try:
+                src_dir.rename(default_dir / d)
+            except OSError:
+                pass
+
+    _init_registry()
+    print(f"[autolearn] Migrated flat layout to {default_dir}")
+
+
+def _init_registry() -> None:
+    """Create .persona_registry.json with the default persona if absent."""
+    if REGISTRY_FILE.exists():
+        return
+    registry = {
+        "default": {
+            "uuid": None,  # resolved lazily from salt on first sync
+            "description": "Default knowledge store",
+            "sync_enabled": True,
+            "created_at": date.today().isoformat(),
+        }
+    }
+    _save_registry(registry)
+
+
+def _load_registry() -> dict:
+    if REGISTRY_FILE.exists():
+        try:
+            return json.loads(REGISTRY_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_registry(registry: dict) -> None:
+    DATA_HOME.mkdir(parents=True, exist_ok=True)
+    REGISTRY_FILE.write_text(json.dumps(registry, indent=2) + "\n")
+
+
+def _resolve_persona_uuid(name: str, salt: bytes) -> str:
+    """Return the UUID for a persona, creating the registry entry if needed.
+
+    For 'default': uses _sc.default_persona_id(salt) so existing Phase 1
+    encrypted blobs stay decryptable. For other personas: random UUID v4.
+    """
+    registry = _load_registry()
+    entry = registry.get(name)
+    if entry and entry.get("uuid"):
+        return entry["uuid"]
+    if name == "default":
+        resolved = _sc.default_persona_id(salt)
+    else:
+        resolved = str(uuid_mod.uuid4())
+    if entry:
+        entry["uuid"] = resolved
+    else:
+        registry[name] = {
+            "uuid": resolved,
+            "description": "",
+            "sync_enabled": True,
+            "created_at": date.today().isoformat(),
+        }
+    _save_registry(registry)
+    return resolved
 
 
 def _read_md(path: Path) -> str:
@@ -991,23 +1128,142 @@ def cmd_log_review_complete(args):
 
 
 # ===========================================================================
-# Sync (Phase 1: default persona only, flat layout)
+# Persona management (Phase 3)
 #
-# Implements docs/designs/sync/{protocol,encryption}-LLD.md + EARS.
-# The implicit "default" persona_id is derived deterministically from the
-# install salt so that two machines logged in with the same password+salt
-# derive the same persona_id and can sync. When Phase 3 adds the explicit
-# personas/{name}/ directory layout + persona registry, the registry can
-# adopt this deterministic value as the default persona's UUID without
-# breaking existing encrypted blobs.
+# Implements docs/designs/sync/persona-LLD.md + persona-EARS.md.
 # ===========================================================================
 
-SYNC_CONFIG_FILE = DATA_HOME / "sync.yaml"
-SALT_FILE = DATA_HOME / ".encryption_salt"
-LAST_SYNC_FILE = DATA_HOME / ".last_sync.json"
+DEFAULT_PERSONA_FILE = DATA_HOME / ".default_persona"
 
-# Files synced for the default persona. skills/ is deferred to Phase 3
-# (it needs directory-walking + per-file encryption or a tar envelope).
+
+def _get_default_persona() -> str:
+    if DEFAULT_PERSONA_FILE.exists():
+        name = DEFAULT_PERSONA_FILE.read_text().strip()
+        if name:
+            return name
+    return "default"
+
+
+def _set_default_persona(name: str) -> None:
+    DATA_HOME.mkdir(parents=True, exist_ok=True)
+    DEFAULT_PERSONA_FILE.write_text(name + "\n")
+
+
+# @spec SYNC-PER-001
+def cmd_persona_create(args):
+    name = _slugify(args.name)
+    desc = args.description
+    persona_path = PERSONAS_DIR / name
+    if persona_path.exists():
+        print(f"Persona already exists: {name}")
+        sys.exit(1)
+    persona_path.mkdir(parents=True, exist_ok=True)
+    (persona_path / "skills").mkdir(exist_ok=True)
+    (persona_path / "skills" / ".archive").mkdir(exist_ok=True)
+    registry = _load_registry()
+    registry[name] = {
+        "uuid": str(uuid_mod.uuid4()),
+        "description": desc,
+        "sync_enabled": True,
+        "created_at": date.today().isoformat(),
+    }
+    _save_registry(registry)
+    # Seed default files
+    (persona_path / "memory.md").write_text(f"# Autolearn Memory ({name})\n\n<!-- Managed by autolearn. -->\n\n")
+    (persona_path / "user-profile.md").write_text("# User Profile\n\n<!-- Managed by autolearn. -->\n\n")
+    (persona_path / "config.yaml").write_text(
+        f"review_threshold: 10\nsession_review_on_idle: true\nmax_conversation_buffer: 50\n"
+        f"curator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\nescalation_threshold: 3\n"
+    )
+    print(f"Created persona: {name} at {persona_path}")
+    print(f"  UUID: {registry[name]['uuid']}")
+    print(f"  Description: {desc}")
+
+
+# @spec SYNC-PER-002
+def cmd_persona_list(args):
+    registry = _load_registry()
+    if not registry:
+        print("No personas. Run `autolearn persona create <name> \"description\"`.")
+        return
+    machine_default = _get_default_persona()
+    for name, meta in sorted(registry.items()):
+        uid = meta.get("uuid") or "unresolved"
+        desc = meta.get("description", "")
+        sync_en = meta.get("sync_enabled", True)
+        archived = meta.get("archived", False)
+        marker = " *" if name == machine_default else ""
+        state = "archived" if archived else ("sync-on" if sync_en else "sync-off")
+        uid_display = f"{uid[:12]}..." if len(uid) > 12 else uid
+        print(f"  {name}{marker} [{state}] {uid_display} {desc}")
+
+
+# @spec SYNC-PER-003
+def cmd_persona_switch(args):
+    name = args.name
+    registry = _load_registry()
+    if name not in registry:
+        print(f"Persona not found: {name}")
+        sys.exit(1)
+    if registry[name].get("archived"):
+        print(f"Persona '{name}' is archived. Unarchive it first.")
+        sys.exit(1)
+    _set_default_persona(name)
+    print(f"Switched machine-wide default persona to: {name}")
+    print(f"  Commands without --persona will now use '{name}'.")
+
+
+# @spec SYNC-PER-004
+def cmd_persona_archive(args):
+    name = args.name
+    registry = _load_registry()
+    if name not in registry:
+        print(f"Persona not found: {name}")
+        sys.exit(1)
+    if name == "default":
+        print("Cannot archive the 'default' persona.")
+        sys.exit(1)
+    registry[name]["archived"] = True
+    registry[name]["sync_enabled"] = False
+    registry[name]["archived_at"] = date.today().isoformat()
+    _save_registry(registry)
+    # If this was the machine default, revert to 'default'
+    if _get_default_persona() == name:
+        _set_default_persona("default")
+        print(f"  Machine default reverted to 'default'.")
+    print(f"Archived persona: {name} (files kept locally, sync disabled)")
+
+
+# @spec SYNC-PER-005
+def cmd_persona_rename(args):
+    old = _slugify(args.old)
+    new = _slugify(args.new)
+    registry = _load_registry()
+    if old not in registry:
+        print(f"Persona not found: {old}")
+        sys.exit(1)
+    if new in registry:
+        print(f"Persona already exists: {new}")
+        sys.exit(1)
+    old_path = PERSONAS_DIR / old
+    new_path = PERSONAS_DIR / new
+    if old_path.exists():
+        old_path.rename(new_path)
+    registry[new] = registry.pop(old)
+    _save_registry(registry)
+    if _get_default_persona() == old:
+        _set_default_persona(new)
+    print(f"Renamed persona: {old} -> {new}")
+
+
+
+# Each persona has its own UUID (stored in .persona_registry.json). The
+# default persona's UUID is derived deterministically from the install
+# salt so that Phase 1 encrypted blobs remain decryptable.
+# ===========================================================================
+
+LAST_SYNC_FILE = ACTIVE_PERSONA_DIR / ".last_sync.json"
+
 SYNC_FILES = [
     "memory.md",
     "user-profile.md",
@@ -1184,7 +1440,7 @@ def cmd_sync_login(args):
             "(macOS Keychain works out of the box; Linux needs gnome-keyring or kwallet)."
         )
 
-    persona_id = _sc.default_persona_id(salt)
+    persona_id = _resolve_persona_uuid("default", salt)
     print(f"\nSync login complete.")
     print(f"  Server:    {_get_server_url()}")
     print(f"  Persona:   default ({persona_id})")
@@ -1225,7 +1481,7 @@ def cmd_sync_export_key(args):
 
 def _encrypt_local_file(master_key: bytes, persona_id: str, rel_path: str) -> dict | None:
     """Read a local file, encrypt it, return the push record, or None if missing."""
-    file_path = DATA_HOME / rel_path
+    file_path = ACTIVE_PERSONA_DIR / rel_path
     if not file_path.exists():
         return None
     plaintext = file_path.read_bytes()
@@ -1246,7 +1502,7 @@ def cmd_sync_push(args):
         raise SystemExit("Not logged in. Run `autolearn sync login` first.")
     salt = _sc.load_salt(SALT_FILE)
     master_key = _get_master_key_or_prompt()
-    persona_id = _sc.default_persona_id(salt)
+    persona_id = _resolve_persona_uuid(ACTIVE_PERSONA, salt)
     machine = _sc.machine_id()
 
     files_payload = []
@@ -1311,7 +1567,7 @@ def cmd_sync_pull(args):
         raise SystemExit("Not logged in. Run `autolearn sync login` first.")
     salt = _sc.load_salt(SALT_FILE)
     master_key = _get_master_key_or_prompt()
-    persona_id = _sc.default_persona_id(salt)
+    persona_id = _resolve_persona_uuid(ACTIVE_PERSONA, salt)
 
     since = 0
     if not args.full:
@@ -1349,7 +1605,7 @@ def cmd_sync_pull(args):
             tampered += 1
             continue
 
-        local_path = DATA_HOME / rel_path
+        local_path = ACTIVE_PERSONA_DIR / rel_path
         if not local_path.exists():
             # @spec SYNC-PROTO-008
             local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1415,9 +1671,14 @@ def main():
     )
     sub = parser.add_subparsers(dest="command")
 
+    # --persona flag shared by all data-operating subcommands.
+    persona_parent = argparse.ArgumentParser(add_help=False)
+    persona_parent.add_argument("--persona", default=None,
+                                help="Persona name (default: machine default or 'default')")
+
     sub.add_parser("init", help="Initialize the autolearn store")
 
-    mem = sub.add_parser("memory", help="Manage persistent memory")
+    mem = sub.add_parser("memory", help="Manage persistent memory", parents=[persona_parent])
     mem_sub = mem.add_subparsers(dest="subcommand")
     mem_add = mem_sub.add_parser("add", help="Add a memory entry")
     mem_add.add_argument("content", help="The lesson to remember")
@@ -1430,7 +1691,7 @@ def main():
     mem_weaken = mem_sub.add_parser("weaken", help="Reduce reinforcement on a memory")
     mem_weaken.add_argument("keyword", help="Keyword matching the entry to weaken")
 
-    usr = sub.add_parser("user", help="Manage user profile")
+    usr = sub.add_parser("user", help="Manage user profile", parents=[persona_parent])
     usr_sub = usr.add_subparsers(dest="subcommand")
     usr_add = usr_sub.add_parser("add", help="Add a preference")
     usr_add.add_argument("content", help="The preference to record")
@@ -1438,7 +1699,7 @@ def main():
     usr_rm.add_argument("keyword", help="Keyword to match")
     usr_sub.add_parser("list", help="List all user profile entries")
 
-    sk = sub.add_parser("skill", help="Manage agent-created skills")
+    sk = sub.add_parser("skill", help="Manage agent-created skills", parents=[persona_parent])
     sk_sub = sk.add_subparsers(dest="subcommand")
     sk_create = sk_sub.add_parser("create", help="Create a new skill")
     sk_create.add_argument("name", help="Skill name")
@@ -1452,12 +1713,12 @@ def main():
     sk_sub.add_parser("list", help="List all agent-created skills")
     sk_sub.add_parser("usage", help="Show usage telemetry")
 
-    cur = sub.add_parser("curator", help="Skill lifecycle management")
+    cur = sub.add_parser("curator", help="Skill lifecycle management", parents=[persona_parent])
     cur_sub = cur.add_subparsers(dest="subcommand")
     cur_sub.add_parser("run", help="Run curator (stale/archive transitions)")
     cur_sub.add_parser("status", help="Show curator state")
 
-    srch = sub.add_parser("search", help="FTS5 full-text search over past sessions")
+    srch = sub.add_parser("search", help="FTS5 full-text search over past sessions", parents=[persona_parent])
     srch_sub = srch.add_subparsers(dest="subcommand")
     srch_init = srch_sub.add_parser("init", help="Build or update the FTS5 search index")
     srch_init.add_argument("--full", action="store_true", help="Full rebuild instead of incremental")
@@ -1471,7 +1732,7 @@ def main():
     srch_sessions.add_argument("terms", help="Search terms for session titles")
     srch_sub.add_parser("status", help="Show search index status")
 
-    log = sub.add_parser("log", help="Log structured events to observations.jsonl")
+    log = sub.add_parser("log", help="Log structured events to observations.jsonl", parents=[persona_parent])
     log_sub = log.add_subparsers(dest="subcommand")
     log_rc = log_sub.add_parser("review-complete", help="Log review completion outcome")
     log_rc.add_argument("--observations", type=int, default=0, help="Number of observations recorded")
@@ -1482,7 +1743,7 @@ def main():
     log_rc.add_argument("--topics", default="", help="Comma-separated topics in the conversation")
     log_rc.add_argument("--nothing", action="store_true", help="Nothing was recorded")
 
-    sync = sub.add_parser("sync", help="Cross-machine sync (E2E-encrypted)")
+    sync = sub.add_parser("sync", help="Cross-machine sync (E2E-encrypted)", parents=[persona_parent])
     sync_sub = sync.add_subparsers(dest="subcommand")
     sync_login = sync_sub.add_parser("login", help="Derive master key and store in keychain")
     sync_login.add_argument("--server-url", help="Sync server URL (default: http://localhost:3001)")
@@ -1492,6 +1753,21 @@ def main():
     sync_pull = sync_sub.add_parser("pull", help="Download, decrypt, and merge remote files")
     sync_pull.add_argument("--full", action="store_true", help="Pull all files, ignoring last-sync timestamp")
     sync_sub.add_parser("status", help="Show sync state on the server")
+
+    # @spec SYNC-PER-001 through SYNC-PER-005
+    per = sub.add_parser("persona", help="Manage knowledge personas")
+    per_sub = per.add_subparsers(dest="subcommand")
+    per_create = per_sub.add_parser("create", help="Create a new persona")
+    per_create.add_argument("name", help="Persona name")
+    per_create.add_argument("description", help="Persona description")
+    per_sub.add_parser("list", help="List all personas")
+    per_switch = per_sub.add_parser("switch", help="Set machine-wide default persona")
+    per_switch.add_argument("name", help="Persona name")
+    per_archive = per_sub.add_parser("archive", help="Archive a persona")
+    per_archive.add_argument("name", help="Persona name")
+    per_rename = per_sub.add_parser("rename", help="Rename a persona")
+    per_rename.add_argument("old", help="Old name")
+    per_rename.add_argument("new", help="New name")
 
     args = parser.parse_args()
     if not args.command:
@@ -1541,7 +1817,20 @@ def main():
             "pull": cmd_sync_pull,
             "status": cmd_sync_status,
         },
+        "persona": {
+            "create": cmd_persona_create,
+            "list": cmd_persona_list,
+            "switch": cmd_persona_switch,
+            "archive": cmd_persona_archive,
+            "rename": cmd_persona_rename,
+        },
     }
+
+    # @spec SYNC-PER-006, SYNC-PER-015, SYNC-PER-016
+    persona_name = getattr(args, "persona", None)
+    if persona_name is None:
+        persona_name = _get_default_persona()
+    _set_persona(persona_name)
 
     cmd_map = commands.get(args.command)
     if isinstance(cmd_map, dict):
