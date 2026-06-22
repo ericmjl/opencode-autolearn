@@ -5,8 +5,9 @@
 
 > **Status legend** — Feature Breakdown and Key Design Decisions mark each item as
 > `shipped` (implemented in `autolearn.py` / `autolearn.js`), `planned` (designed
-> but not yet implemented), or `partial`. Sync, multi-persona, and E2E encryption
-> are designed but not yet built — their LLD/EARS docs describe the target design.
+> but not yet implemented), or `partial`. Sync Phase 1 (E2E encryption + Fastify
+> server + default-persona push/pull) is shipped; multi-persona, Convex backend,
+> plugin auto-sync, rotate-key, and interactive conflict resolution remain planned.
 
 ## Problem Statement
 
@@ -18,7 +19,7 @@ AI coding agents repeat the same mistakes across sessions because they have no m
 2. **Behavioral escalation** — Detect when a correction recurs across projects and escalate it into persistent agent instructions (AGENTS.md). _(shipped via `self-improving-agent/improve.py`)_
 3. **Skill evolution** — Allow the agent to create, patch, and retire its own skills based on observed patterns. _(shipped)_
 4. **Zero-friction operation** — Work as a background plugin that requires no user intervention during normal operation. _(shipped)_
-5. **Cross-machine sync** — Propagate learned knowledge between machines via an E2E-encrypted sync service. _(planned — see Decisions 5–7 and `docs/designs/sync/`)_
+5. **Cross-machine sync** — Propagate learned knowledge between machines via an E2E-encrypted sync service. _(partial — Phase 1 shipped: AES-256-GCM crypto, sync CLI, Fastify+SQLite backend. Multi-persona + Convex backend + plugin auto-sync still planned. See Decisions 5–7 and `docs/designs/sync/`.)_
 
 ## Non-Goals
 
@@ -120,7 +121,7 @@ Machine A                              Machine B
 - Node.js CLI: Would match the plugin language but the reviewer agent works better with Python for string processing and YAML manipulation.
 - Direct file writes from the skill: Fragile, no validation, no deduplication logic.
 
-### Decision 5: E2E-encrypted sync (zero-knowledge server) — _planned_
+### Decision 5: E2E-encrypted sync (zero-knowledge server) — _partial (Phase 1 shipped)_
 
 **Choice**: Client-side AES-256-GCM encryption before syncing. The server stores only opaque ciphertext.
 
@@ -142,7 +143,7 @@ Machine A                              Machine B
 - Multiple autolearn installations: Duplication, each needs its own plugin config.
 - Single store with persona field: Leakage risk, complex filtering.
 
-### Decision 7: Backend-agnostic sync API (Convex or self-hosted) — _planned_
+### Decision 7: Backend-agnostic sync API (Convex or self-hosted) — _partial (Fastify shipped, Convex pending)_
 
 **Choice**: A thin sync API spec (push/pull/status) that any backend can implement. Ships with a Convex backend and a self-hosted Fastify+SQLite backend.
 
@@ -216,9 +217,9 @@ The flat layout above moves under `personas/{name}/`:
 | Review Agent | shipped | Examine conversations, extract learnings | autolearn-reviewer SKILL.md |
 | Session Search | shipped | FTS5 full-text search over past OpenCode conversations | autolearn.py, search.db |
 | Behavioral Escalation | shipped | Cross-project rule tracking and AGENTS.md writes | self-improving-agent/improve.py |
-| E2E-Encrypted Sync | planned | Client-side AES-256-GCM, zero-knowledge server | autolearn.py, sync server |
+| E2E-Encrypted Sync | partial | Client-side AES-256-GCM, zero-knowledge server. Phase 1 ships crypto, CLI (`sync login/push/pull/status`), Fastify backend. rotate-key + interactive pull deferred. | `autolearn.py` (sync), `sync-server/` |
 | Multi-Persona | planned | Isolated knowledge stores per context (work/personal/OSS) | autolearn.py |
-| Backend-Agnostic Sync | planned | Convex (managed) or self-hosted (Fastify+SQLite) | sync server |
+| Backend-Agnostic Sync | partial | Fastify+SQLite shipped (uses `bun:sqlite`). Convex HTTP Actions shim planned for Phase 2. | `sync-server/` |
 
 ## Risks and Mitigations
 

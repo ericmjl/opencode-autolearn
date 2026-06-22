@@ -202,8 +202,8 @@ See [`skills/self-improving-agent/SKILL.md`](skills/self-improving-agent/SKILL.m
 
 Full design documentation lives in `docs/`:
 
-- [`docs/high-level-design.md`](docs/high-level-design.md) — architecture, decisions, risk matrix. Each feature and decision is marked `shipped` or `planned`.
-- [`docs/designs/`](docs/designs/) — 5 LLDs and 8 EARS specifications for shipped features (conversation monitoring, knowledge store, skill management, review agent, session search), plus 3 LLDs and 3 EARS for planned sync/multi-persona work. See [`docs/README.md`](docs/README.md) for a status-indexed overview.
+- [`docs/high-level-design.md`](docs/high-level-design.md) — architecture, decisions, risk matrix. Each feature and decision is marked `shipped`, `partial`, or `planned`.
+- [`docs/designs/`](docs/designs/) — 5 LLDs and 8 EARS specifications for shipped features (conversation monitoring, knowledge store, skill management, review agent, session search), plus 3 LLDs and 3 EARS for sync/multi-persona work (Phase 1 of sync shipped — see [`docs/README.md`](docs/README.md) for the status-indexed overview).
 
 ## Running the curator on a schedule
 
@@ -238,7 +238,7 @@ Autolearn records conversation excerpts locally to learn from them. By default *
 
 - All data lives under `~/.autolearn/` and `~/.agent-improvement/`.
 - Messages are redacted of likely secrets (API keys, tokens, passwords) before buffering.
-- The plugin and CLI do not make outbound network requests. Sync (planned) will be opt-in and E2E-encrypted — see [`docs/high-level-design.md`](docs/high-level-design.md) Decisions 5–7.
+- The plugin and core CLI do not make outbound network requests. Sync is opt-in and E2E-encrypted (Phase 1 shipped: `autolearn sync login/push/pull/status` + Fastify server in `sync-server/`) — see [`docs/high-level-design.md`](docs/high-level-design.md) Decisions 5–7.
 - To wipe everything: `rm -rf ~/.autolearn ~/.agent-improvement` and remove the plugin/instructions entries from `~/.config/opencode/opencode.json`.
 
 ## Uninstall
