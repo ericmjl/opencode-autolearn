@@ -24,8 +24,8 @@
 
 ## Auto-Sync
 
-- [ ] **SYNC-PROTO-012**: When `sync_on_start` is enabled, the plugin shall auto-pull on session start. _(deferred — Phase 4 plugin integration)_
-- [ ] **SYNC-PROTO-013**: When `sync_after_review` is enabled, the plugin shall auto-push after a review completes. _(deferred — Phase 4 plugin integration)_
+- [x] **SYNC-PROTO-012**: When `sync_on_start` is enabled, the plugin shall auto-pull on session start.
+- [x] **SYNC-PROTO-013**: When `sync_after_review` is enabled, the plugin shall auto-push after a review completes.
 - [x] **SYNC-PROTO-014**: If the sync server is unreachable, sync shall silently fail and local data shall remain authoritative.
 
 ## Status
