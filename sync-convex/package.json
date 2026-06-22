@@ -1,0 +1,17 @@
+{
+  "name": "autolearn-sync-convex",
+  "version": "0.1.0",
+  "description": "Convex HTTP Actions backend for the autolearn sync protocol",
+  "type": "module",
+  "scripts": {
+    "dev": "convex dev",
+    "deploy": "convex deploy"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3"
+  },
+  "devDependencies": {
+    "convex": "^1.17.0"
+  },
+  "license": "MIT"
+}
