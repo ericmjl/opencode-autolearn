@@ -61,8 +61,8 @@ The keychain stores `master_key` under service name `autolearn-sync`. Password i
 1. Read file from ~/.autolearn/personas/{name}/{file}
 2. Derive file_key from master_key → persona_key → file_key
 3. Generate random 12-byte nonce
-4. Encrypt: AES-256-GCM(file_key, nonce, plaintext) → ciphertext + tag
-5. Package: { key: file_name, ciphertext: base64, nonce: base64, tag: base64 }
+4. Encrypt: AES-256-GCM(file_key, nonce, plaintext) → ciphertext||tag (tag appended)
+5. Package: { key: file_name, ciphertext: base64(ct||tag), nonce: base64, tag: "" }
 6. Send to sync server
 ```
 
@@ -71,7 +71,8 @@ The keychain stores `master_key` under service name `autolearn-sync`. Password i
 ```
 1. Receive { key, ciphertext, nonce, tag } from sync server
 2. Derive file_key (same as push)
-3. Decrypt: AES-256-GCM-decrypt(file_key, nonce, ciphertext, tag) → plaintext
+3. Decrypt: AES-256-GCM-decrypt(file_key, nonce, ciphertext) → plaintext
+   (ciphertext includes the appended tag; GCM verifies it internally)
 4. If tag verification fails: report tampering, skip file
 5. Write plaintext to ~/.autolearn/personas/{name}/{file}
 ```

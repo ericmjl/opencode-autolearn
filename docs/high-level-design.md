@@ -1,7 +1,7 @@
 # OpenCode Autolearn - High-Level Design
 
 **Created**: 2026-06-05
-**Last updated**: 2026-06-21
+**Last updated**: 2026-06-22
 
 > **Status legend** — Feature Breakdown and Key Design Decisions mark each item as
 > `shipped` (implemented in `autolearn.py` / `autolearn.js`), `planned` (designed
