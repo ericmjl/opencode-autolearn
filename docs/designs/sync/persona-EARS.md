@@ -35,8 +35,8 @@
 
 ## OpenCode Integration
 
-- [ ] **SYNC-PER-017**: The `instructions` field in `opencode.json` shall include memory.md from all active personas for the current project.
-- [ ] **SYNC-PER-018**: When a project switches persona (`.autolearn-persona` changes), the plugin shall reload the appropriate memory.md.
+- [ ] **SYNC-PER-017**: The `instructions` field in `opencode.json` shall include memory.md from all active personas for the current project. _(deferred — plugin currently loads `personas/default/memory.md` only)_
+- [ ] **SYNC-PER-018**: When a project switches persona (`.autolearn-persona` changes), the plugin shall reload the appropriate memory.md. _(deferred — depends on SYNC-PER-014)_
 
 ## Related Documents
 
