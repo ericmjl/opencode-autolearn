@@ -65,19 +65,22 @@ if plugin_entry not in plugins:
     data['plugin'] = plugins
     changed = True
 
-# instructions
+# instructions — point at the generated context view (Memory Insight);
+# strip any superseded memory.md paths (persona + flat-layout).
 if 'instructions' not in data:
     data['instructions'] = []
 instructions = data['instructions'] if isinstance(data['instructions'], list) else [data['instructions']]
-mem_entry = os.path.expanduser('~/.autolearn/personas/default/memory.md')
-# Also remove any stale flat-layout path from a previous install
-old_mem = os.path.expanduser('~/.autolearn/memory.md')
-if old_mem in instructions:
-    instructions = [i for i in instructions if i != old_mem]
+ctx_entry = os.path.expanduser('~/.autolearn/personas/default/memory.context.md')
+superseded = {
+    os.path.expanduser('~/.autolearn/personas/default/memory.md'),
+    os.path.expanduser('~/.autolearn/memory.md'),
+}
+if any(i in superseded for i in instructions):
+    instructions = [i for i in instructions if i not in superseded]
     data['instructions'] = instructions
     changed = True
-if mem_entry not in instructions:
-    instructions.append(mem_entry)
+if ctx_entry not in instructions:
+    instructions.append(ctx_entry)
     data['instructions'] = instructions
     changed = True
 
@@ -115,11 +118,13 @@ else:
     print('  Already configured (' + path + ')')
 " 2>&1
 
-# 4. Initialize store
+# 4. Initialize + bootstrap the registry (migrates legacy memory.md if present)
 echo "[4/5] Initializing autolearn store..."
 CLI="$SKILLS_DIR/autolearn-reviewer/scripts/autolearn.py"
 if command -v uv &>/dev/null; then
     uv run "$CLI" init
+    uv run "$CLI" retention score   # migrates legacy store -> registry, scores tiers
+    uv run "$CLI" memory compose    # generate memory.context.md from the registry
 else
     echo "  Warning: uv not found. Run manually: uv run $CLI init"
 fi
@@ -131,7 +136,8 @@ OK=true
 [[ -f "$SKILLS_DIR/autolearn-reviewer/SKILL.md" ]] || { echo "  MISSING: skills/autolearn-reviewer"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn-curator/SKILL.md" ]] || { echo "  MISSING: skills/autolearn-curator"; OK=false; }
 [[ -f "$SKILLS_DIR/self-improving-agent/SKILL.md" ]] || { echo "  MISSING: skills/self-improving-agent"; OK=false; }
-[[ -f "$HOME/.autolearn/personas/default/memory.md" ]] || { echo "  MISSING: ~/.autolearn/personas/default/memory.md"; OK=false; }
+[[ -f "$HOME/.autolearn/personas/default/memory.context.md" ]] || { echo "  MISSING: ~/.autolearn/personas/default/memory.context.md"; OK=false; }
+[[ -f "$HOME/.autolearn/personas/default/memories.jsonl" ]] || { echo "  MISSING: ~/.autolearn/personas/default/memories.jsonl"; OK=false; }
 
 echo ""
 if $OK; then

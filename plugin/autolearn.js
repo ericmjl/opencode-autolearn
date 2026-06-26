@@ -29,7 +29,8 @@ const AL_HOME = process.env.AUTOLEARN_HOME || join(homedir(), ".autolearn")
 const PERSONAS_DIR = join(AL_HOME, "personas")
 const DEFAULT_PERSONA_DIR = join(PERSONAS_DIR, "default")
 const CONFIG_FILE = join(DEFAULT_PERSONA_DIR, "config.yaml")
-const MEMORY_FILE = join(DEFAULT_PERSONA_DIR, "memory.md")
+const MEMORY_FILE = join(DEFAULT_PERSONA_DIR, "memory.context.md")
+const LEGACY_MEMORY_FILE = join(DEFAULT_PERSONA_DIR, "memory.md")
 const USER_FILE = join(DEFAULT_PERSONA_DIR, "user-profile.md")
 const OBS_FILE = join(DEFAULT_PERSONA_DIR, "observations.jsonl")
 const BIN_DIR = join(DEFAULT_PERSONA_DIR, "bin")
@@ -187,7 +188,7 @@ function truncate(text, maxLen) {
   return text.slice(0, maxLen - 3) + "..."
 }
 
-// @spec CM-MEM-001
+// @spec CM-MEM-001, MI-CMP-009, MI-CMP-010
 function injectInstructions() {
   try {
     const configPath = join(homedir(), ".config", "opencode", "opencode.json")
@@ -196,21 +197,41 @@ function injectInstructions() {
     const data = JSON.parse(raw)
     if (!data.instructions) data.instructions = []
 
-    // Remove old flat-layout memory path if present (Phase 3 migration)
+    // Remove superseded memory instruction paths (flat-layout + persona memory.md).
+    // Memory Insight loads the generated memory.context.md instead.
     const oldMemoryFile = join(AL_HOME, "memory.md")
     const hadOld = data.instructions.includes(oldMemoryFile)
-    if (hadOld) {
-      data.instructions = data.instructions.filter(p => p !== oldMemoryFile)
+    const hadLegacy = data.instructions.includes(LEGACY_MEMORY_FILE)
+    let changed = hadOld || hadLegacy
+    if (hadOld || hadLegacy) {
+      data.instructions = data.instructions.filter(
+        p => p !== oldMemoryFile && p !== LEGACY_MEMORY_FILE
+      )
     }
 
     if (!data.instructions.includes(MEMORY_FILE)) {
       data.instructions.push(MEMORY_FILE)
-      writeFileSync(configPath, JSON.stringify(data, null, 2) + "\n")
-    } else if (hadOld) {
+      changed = true
+    }
+    if (changed) {
       writeFileSync(configPath, JSON.stringify(data, null, 2) + "\n")
     }
   } catch (err) {
     dbg("injectInstructions failed:", err.message)
+  }
+}
+
+// @spec MI-CMP-009 — regenerate memory.context.md (runs migration on first call)
+function composeContext() {
+  try {
+    const proc = Bun.spawn(
+      ["uv", "run", AUTOLEARN_CLI, "memory", "compose"],
+      { stdout: "ignore", stderr: "ignore", stdin: "ignore", detached: true }
+    )
+    try { proc.unref() } catch {}
+    dbg("memory compose spawned")
+  } catch (err) {
+    dbg("memory compose failed:", err.message)
   }
 }
 
@@ -251,6 +272,7 @@ export const AutolearnPlugin = async (ctx) => {
   const projectName = () => (directory || worktree || process.cwd()).split("/").pop() || "unknown"
 
   injectInstructions()
+  composeContext()
 
   // @spec CM-RS-003, CM-RS-004, CM-RS-005
   async function spawnReview() {
