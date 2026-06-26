@@ -34,8 +34,8 @@ action by writing to files.
    - "the videos should be landscape, not vertical" (format spec)
    - "use PEP 723 inline script metadata for any Python scripts" (convention)
    These often use "should", "we use", "we don't", "I want", "needs to be"
-   — without explicit "I prefer" or "always" markers. Route these to
-   user-profile.md or memory.md depending on scope.
+   — without explicit "I prefer" or "always" markers. Route these to the user
+   profile (type="user") or memory depending on scope.
 4. **Frustration about repetition**: "again?", "I keep telling you",
    "every time", "I've said this before"
 5. **Explicit instruction to remember**: "remember this", "write that down",
@@ -141,8 +141,8 @@ was removed on 2026-06-16 (along with the self-improving-agent skill, which ship
 `improve.py`). There is no separate observation store anymore. Capture all corrections
 and preferences directly through the durable mechanisms below:
 
-- **Step 5** (memory.md): durable cross-session lessons
-- **Step 6** (user-profile.md): user communication/workflow preferences
+- **Step 5** (memory registry): durable cross-session lessons
+- **Step 6** (user registry, `type="user"`): communication/workflow preferences
 - **Step 7** (skills): repeatable workflows and procedures
 
 When recording, phrase rules as imperatives. "Use uv tool for Python CLI tools,
@@ -170,22 +170,22 @@ Only add a new entry if the lesson is genuinely novel:
 uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py memory add "<lesson>"
 ```
 
-Memory entries should be concise, actionable, and general. They are
-loaded into every session. Keep the total memory under 3000 characters.
+Memory entries should be concise, actionable, and general. They live in an
+unbounded registry (`memories.jsonl`) and are surfaced into each session via a
+relevance-ranked context view (`memory.context.md`).
 
 Good: "This project uses pytest with -x flag for fast feedback loops."
 Bad: "User said to use pytest on Tuesday afternoon during standup."
 
-**Eviction caveat (verified in source):** `memory add` calls `_trim_entries`,
-which SILENTLY DROPS the OLDEST entries (front-of-list) whenever the total
-exceeds 3000 chars — it keeps newer entries and trims from the front. There is
-only ONE source: `memory list` reads the same `memory.md`; do not infer a
-separate "database of all entries ever added." Consequence: prefer
-`memory strengthen` (adds no characters) over `memory add` whenever a lesson is
-semantically close to an existing entry, to avoid evicting an unrelated older
-lesson. If `memory add` is unavoidable, first check the current char total
-(`memory list` prints it); if near 3000, `memory remove` a low-value entry
-deliberately to make room rather than letting the oldest fall off silently.
+**No character cap (Memory Insight):** `memory add` writes to the registry,
+which is unbounded — entries are never silently trimmed for length. A memory
+leaves the active set only through Ebbinghaus decay: once its retention score
+drops below the cold tier (`0.15`) and stays there past the grace period
+(`eviction_grace_days`, default 90), it is evicted. `memory strengthen` boosts
+retention and resets that decay. Still prefer `strengthen` over `add` for
+semantic duplicates — not to avoid truncation, but to keep the registry clean
+and the reinforcement signal accurate. Use `memory list` to see the active set;
+run `retention score` to refresh tiers.
 
 ### Step 6: Update user profile
 
@@ -195,18 +195,10 @@ For user preferences about communication, workflow, or habits:
 uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py user add "<preference>"
 ```
 
-**Eviction caveat (verified in source, 2026-06-14):** `user add` calls the
-SAME `_trim_entries` helper as `memory add`, with `MAX_USER_CHARS = 2000`.
-It SILENTLY DROPS the OLDEST entries (front-of-list) whenever the total exceeds
-2000 chars. Unlike `memory list`, `user list` does NOT print a char total, so
-you cannot tell you are near the limit until AFTER the damage is done.
-Consequence: before calling `user add`, run `user list` and estimate the byte
-total (`wc -c user-profile.md`); if already near 2000, either (a) condense an
-existing entry first, (b) skip if the preference is already in memory.md, or
-(c) `user remove` a low-value entry deliberately. NEVER assume `user add`
-appends. Data loss from this path is silent and unrecoverable — no backup is
-kept. (Encountered: a `user add` call evicted 4 of 6 existing entries in one
-shot; 2 were only in the profile and were restored from earlier session output.)
+**No character cap:** User preferences are stored in the same unbounded
+registry as memories (`type="user"`), so the same no-cap / decay-governed model
+from Step 5 applies. There is no 2000-character limit and no silent trimming;
+just check `user list` for semantic duplicates before adding.
 
 ### Step 7: Create or patch skills
 
@@ -258,8 +250,9 @@ you decided not to record some of them. This enables future gap analysis.
 - Never modify project source code. Only write to `~/.autolearn/`.
 - Never write secrets, API keys, or credentials to memory or skills.
 - Never create more than 2 new skills per review.
-- Keep memory.md under 3000 characters. Remove old entries if needed.
-- Keep user-profile.md under 2000 characters.
+- The memory registry is unbounded — entries leave only via Ebbinghaus decay
+  (cold for `eviction_grace_days`), not a character cap. Prefer `memory
+  strengthen` over `memory add` for semantic duplicates to keep it clean.
 - If in doubt about whether to record something, consider the signal strength.
   Strong signals (corrections, preferences, declarative specs, workarounds) should
   always be recorded. Weak signals (contextual facts) can be skipped. System
