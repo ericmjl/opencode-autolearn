@@ -43,6 +43,15 @@ from slugify import slugify as python_slugify
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sync_crypto as _sc
 
+# Memory Insight subsystem (registry + retention + composer + shift + ui).
+# These are siblings in the same scripts dir; imported here so the CLI can
+# dispatch to them. See docs/designs/memory-insight/LLD.md.
+import registry as _reg
+import retention as _retention
+import composer as _composer
+import shift as _shift
+import inspector_server as _ui
+
 # @spec KS-MEM-020
 DATA_HOME = Path(os.environ.get("AUTOLEARN_HOME", Path.home() / ".autolearn"))
 
@@ -113,6 +122,7 @@ def _ensure_dirs():
 _FLAT_FILES = [
     "memory.md", "user-profile.md", "config.yaml", "observations.jsonl",
     "strengths.json", "search.db", ".curator_state.json",
+    "memories.jsonl", "topics.jsonl", "candidates.jsonl", "memory.context.md",
 ]
 
 
@@ -342,152 +352,211 @@ def cmd_init(args):
     print(f"Initialized autolearn store at {DATA_HOME}")
 
 
-# @spec KS-MEM-003, KS-MEM-005, KS-MEM-006
+# --- Memory Insight: registry-backed memory commands -----------------------
+# The registry (memories.jsonl) is now the source of truth; these commands are
+# thin wrappers over registry.py so the reviewer agent's existing CLI surface is
+# preserved. See docs/designs/memory-insight/ (MI-REG-015/016).
+
+def _memory_registry():
+    """MemoryRegistry for the active persona dir (set by _set_persona)."""
+    return _reg.MemoryRegistry(ACTIVE_PERSONA_DIR)
+
+
+def _refresh_context():
+    """Regenerate memory.context.md after a registry mutation (retention-only ranking)."""
+    try:
+        reg = _memory_registry()
+        md = _composer.compose(reg, set())
+        out = ACTIVE_PERSONA_DIR / "memory.context.md"
+        tmp = out.with_suffix(out.suffix + ".tmp")
+        tmp.write_text(md, encoding="utf-8")
+        os.replace(tmp, out)
+    except Exception:
+        pass  # context refresh must never break a memory write
+
+
+# @spec MI-REG-015, MI-CMP-009
 def cmd_memory_add(args):
     _ensure_dirs()
-    content = args.content
-    entries = _extract_entries(_read_md(MEMORY_FILE))
-    entries.append(content)
-    entries = _dedup(entries)
-    entries = _trim_entries(entries, MAX_MEMORY_CHARS)
-    _write_md(MEMORY_FILE, _entries_to_md(entries, "Autolearn Memory"))
-    print(f"Memory updated ({len(entries)} entries, {_total_chars(entries)} chars)")
+    reg = _memory_registry()
+    rec = reg.add(args.content, "memory")
+    _refresh_context()
+    print(f"Memory updated: {rec['text'][:80]}")
 
 
-# @spec KS-MEM-009, KS-MEM-011
 def cmd_memory_remove(args):
-    entries = _extract_entries(_read_md(MEMORY_FILE))
+    reg = _memory_registry()
     keyword = args.keyword.lower()
-    before = len(entries)
-    removed_entries = [e for e in entries if keyword in e.lower()]
-    entries = [e for e in entries if keyword not in e.lower()]
-    removed = before - len(entries)
-    strengths = _load_strengths()
-    for e in removed_entries:
-        key = _slugify(e.lower().strip())
-        strengths.pop(key, None)
-    _save_strengths(strengths)
-    _write_md(MEMORY_FILE, _entries_to_md(entries, "Autolearn Memory"))
-    print(f"Removed {removed} entries ({len(entries)} remaining)")
+    matches = [r for r in reg.load_active() if keyword in r["text"].lower()]
+    for r in matches:
+        reg.remove(r["id"])
+    _refresh_context()
+    print(f"Removed {len(matches)} entries ({len(reg.load_active())} remaining)")
 
 
-# @spec KS-MEM-012, KS-MEM-014
 def cmd_memory_list(args):
-    entries = _extract_entries(_read_md(MEMORY_FILE))
-    if not entries:
+    reg = _memory_registry()
+    records = reg.load_active()
+    if not records:
         print("Memory is empty.")
         return
-    for i, entry in enumerate(entries, 1):
-        print(f"  {i}. {entry}")
-    print(f"\nTotal: {len(entries)} entries, {_total_chars(entries)} chars")
+    for i, r in enumerate(records, 1):
+        print(f"  {i}. {r['text']}")
+    total = len(reg.load())
+    print(f"\nTotal: {len(records)} active entries (registry: {total} total incl. evicted)")
 
 
-# @spec KS-MEM-021, KS-MEM-022
 def cmd_memory_strengths(args):
-    strengths = _load_strengths()
-    if not strengths:
+    reg = _memory_registry()
+    records = [r for r in reg.load() if (r.get("reinforcements") or [])]
+    if not records:
         print("No reinforcement data yet.")
         return
-    entries = _extract_entries(_read_md(MEMORY_FILE))
-    entry_map = {_slugify(e.lower().strip()): e for e in entries}
-    sorted_strengths = sorted(strengths.items(), key=lambda x: x[1]["count"], reverse=True)
-    for key, meta in sorted_strengths:
-        snippet = entry_map.get(key, key)
-        if len(snippet) > 80:
-            snippet = snippet[:77] + "..."
-        count = meta["count"]
-        first = meta.get("first_seen", "?")
-        last = meta.get("last_seen", "?")
-        print(f"  [{count}x] {snippet}  (first: {first}, last: {last})")
-    total = sum(m["count"] for m in strengths.values())
-    reinforced = sum(1 for m in strengths.values() if m["count"] > 1)
-    print(f"\nTotal: {len(strengths)} entries tracked, {reinforced} reinforced, {total} total observations")
+    records.sort(key=lambda r: len(r.get("reinforcements") or []), reverse=True)
+    for r in records:
+        count = len(r.get("reinforcements") or []) + 1
+        snippet = r["text"][:77]
+        print(f"  [{count}x] {snippet}  (first: {r.get('created_at', '?')}, last: {r.get('last_reinforced', '?')})")
+    reinforced = sum(1 for r in records if (r.get("reinforcements") or []))
+    print(f"\nTotal: {len(records)} entries tracked, {reinforced} reinforced")
 
 
-# @spec KS-MEM-026
 def cmd_memory_strengthen(args):
-    entries = _extract_entries(_read_md(MEMORY_FILE))
+    reg = _memory_registry()
     keyword = args.keyword.lower()
-    matches = [(i, e) for i, e in enumerate(entries, 1) if keyword in e.lower()]
+    matches = [r for r in reg.load_active() if keyword in r["text"].lower()]
     if not matches:
         print(f"No memory entries matching '{args.keyword}'.")
         sys.exit(1)
     if len(matches) > 1:
         print(f"Multiple entries match '{args.keyword}', please be more specific:")
-        for i, e in matches:
-            print(f"  {i}. {e[:100]}")
+        for i, r in enumerate(matches, 1):
+            print(f"  {i}. {r['text'][:100]}")
         sys.exit(1)
-    entry = matches[0][1]
-    key = _slugify(entry.lower().strip())
-    strengths = _load_strengths()
-    now = date.today().isoformat()
-    if key in strengths:
-        strengths[key]["count"] += 1
-        strengths[key]["last_seen"] = now
-    else:
-        strengths[key] = {"count": 2, "first_seen": now, "last_seen": now}
-    _save_strengths(strengths)
-    print(f"Strengthened: [{strengths[key]['count']}x] {entry[:80]}")
+    rec = matches[0]
+    reg.reinforce(rec["id"])
+    _refresh_context()
+    new = reg.get(rec["id"])
+    print(f"Strengthened: [{len(new['reinforcements']) + 1}x] {rec['text'][:80]}")
 
 
-# @spec KS-MEM-027
 def cmd_memory_weaken(args):
-    entries = _extract_entries(_read_md(MEMORY_FILE))
+    reg = _memory_registry()
     keyword = args.keyword.lower()
-    matches = [(i, e) for i, e in enumerate(entries, 1) if keyword in e.lower()]
+    matches = [r for r in reg.load_active() if keyword in r["text"].lower()]
     if not matches:
         print(f"No memory entries matching '{args.keyword}'.")
         sys.exit(1)
     if len(matches) > 1:
         print(f"Multiple entries match '{args.keyword}', please be more specific:")
-        for i, e in matches:
-            print(f"  {i}. {e[:100]}")
+        for i, r in enumerate(matches, 1):
+            print(f"  {i}. {r['text'][:100]}")
         sys.exit(1)
-    entry = matches[0][1]
-    key = _slugify(entry.lower().strip())
-    strengths = _load_strengths()
-    if key in strengths:
-        strengths[key]["count"] = max(1, strengths[key]["count"] - 1)
-        if strengths[key]["count"] == 1:
-            del strengths[key]
-        _save_strengths(strengths)
-        if key in strengths:
-            print(f"Weakened: [{strengths[key]['count']}x] {entry[:80]}")
-        else:
-            print(f"Weakened: removed strength record for '{entry[:60]}'")
+    rec = matches[0]
+    reinf = list(rec.get("reinforcements") or [])
+    if reinf:
+        reinf.pop()  # drop most recent reinforcement
+        rec["reinforcements"] = reinf
+        rec["last_reinforced"] = reinf[-1] if reinf else rec.get("created_at")
+        reg.update(rec)
+        _refresh_context()
+        print(f"Weakened: [{len(reinf) + 1}x] {rec['text'][:80]}")
     else:
-        print(f"No strength record for that entry.")
+        print("No strength record for that entry.")
 
 
-# @spec KS-MEM-004, KS-MEM-005, KS-MEM-007
+# --- Memory Insight: new top-level commands --------------------------------
+
+# @spec MI-UI-001, MI-UI-002, MI-UI-003
+def cmd_ui(args):
+    _ui.serve(
+        port=getattr(args, "port", 4321) or 4321,
+        persona_dir=ACTIVE_PERSONA_DIR,
+        open_browser=not bool(getattr(args, "no_browser", False)),
+    )
+
+
+# @spec MI-RTN-005
+def cmd_retention_score(args):
+    reg = _memory_registry()
+    summary = _retention.score_all(reg)
+    print(f"Scored {summary['total']} active memories:")
+    for tier in ("hot", "warm", "cold", "evictable"):
+        print(f"  {tier}: {summary[tier]}")
+
+
+# @spec MI-RTN-007
+def cmd_retention_evict(args):
+    reg = _memory_registry()
+    result = _retention.evict(reg, dry_run=bool(getattr(args, "dry_run", False)))
+    label = "would evict" if result["dry_run"] else "evicted"
+    print(f"{label} {result['evicted']} memories:")
+    for c in result["candidates"]:
+        print(f"  {c['id']} (score {c['score']})")
+
+
+# @spec MI-CMP-001
+def cmd_memory_compose(args):
+    reg = _memory_registry()
+    ctx = _composer._tokens(args.context) if getattr(args, "context", None) else set()
+    md = _composer.compose(reg, ctx)
+    out = ACTIVE_PERSONA_DIR / "memory.context.md"
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    tmp.write_text(md, encoding="utf-8")
+    os.replace(tmp, out)
+    n = max(0, md.count("\n- "))
+    print(f"Wrote {out} ({n} entries, {len(md)} chars)")
+
+
+# @spec MI-SFT-010
+def cmd_topics_scan(args):
+    reg = _memory_registry()
+    changed = _shift.scan(reg, ACTIVE_PERSONA_DIR)
+    if not changed:
+        print("No new/updated candidates.")
+    for c in changed:
+        print(f"  [{c.get('status')}] {c.get('direction')} div={c.get('divergence')} "
+              f"tokens={' '.join(c.get('tokens', [])[:6])}")
+
+
+# @spec MI-SFT-011
+def cmd_topics_candidates(args):
+    pending = [c for c in _shift._load_candidates(ACTIVE_PERSONA_DIR) if c.get("status") == "pending"]
+    if not pending:
+        print("No pending candidates.")
+    for c in pending:
+        print(f"  div={c.get('divergence')} sw={c.get('sw')} ema={c.get('ema')}")
+        for u in c.get("utterances", [])[:2]:
+            print(f"    \"{u}\"")
+
+
+# @spec KS-MEM-004, KS-MEM-005, MI-REG-015  (user profile now lives in the registry, type="user")
 def cmd_user_add(args):
     _ensure_dirs()
-    entries = _extract_entries(_read_md(USER_FILE))
-    entries.append(args.content)
-    entries = _dedup(entries)
-    entries = _trim_entries(entries, MAX_USER_CHARS)
-    _write_md(USER_FILE, _entries_to_md(entries, "User Profile"))
-    print(f"User profile updated ({len(entries)} entries)")
+    reg = _memory_registry()
+    reg.add(args.content, "user")
+    _refresh_context()
+    print(f"User profile updated: {args.content[:80]}")
 
 
-# @spec KS-MEM-010, KS-MEM-011
 def cmd_user_remove(args):
-    entries = _extract_entries(_read_md(USER_FILE))
+    reg = _memory_registry()
     keyword = args.keyword.lower()
-    before = len(entries)
-    entries = [e for e in entries if keyword not in e.lower()]
-    _write_md(USER_FILE, _entries_to_md(entries, "User Profile"))
-    print(f"Removed {before - len(entries)} entries ({len(entries)} remaining)")
+    matches = [r for r in reg.load_active() if r.get("type") == "user" and keyword in r["text"].lower()]
+    for r in matches:
+        reg.remove(r["id"])
+    _refresh_context()
+    print(f"Removed {len(matches)} entries ({len([r for r in reg.load_active() if r.get('type') == 'user'])} remaining)")
 
 
-# @spec KS-MEM-013
 def cmd_user_list(args):
-    entries = _extract_entries(_read_md(USER_FILE))
+    reg = _memory_registry()
+    entries = [r for r in reg.load_active() if r.get("type") == "user"]
     if not entries:
         print("User profile is empty.")
         return
-    for i, entry in enumerate(entries, 1):
-        print(f"  {i}. {entry}")
+    for i, r in enumerate(entries, 1):
+        print(f"  {i}. {r['text']}")
 
 
 # @spec SM-SC-001, SM-SC-002, SM-SC-003, SM-SC-004, SM-SC-005
@@ -695,13 +764,16 @@ def cmd_curator_run(args):
     _save_usage(usage)
 
     escalation_candidates = []
-    strengths = _load_strengths()
-    entries = _extract_entries(_read_md(MEMORY_FILE))
-    entry_map = {_slugify(e.lower().strip()): e for e in entries}
-    for key, meta in strengths.items():
-        if meta["count"] >= escalation_threshold:
-            snippet = entry_map.get(key, key)
-            escalation_candidates.append((snippet, meta["count"]))
+    # Memory Insight: escalation is driven by registry reinforcement counts,
+    # not the legacy strengths.json (which the rewired commands no longer write).
+    try:
+        _reg_records = _memory_registry().load_active()
+    except Exception:
+        _reg_records = []
+    for rec in _reg_records:
+        count = len(rec.get("reinforcements") or []) + 1
+        if count >= escalation_threshold:
+            escalation_candidates.append((rec.get("text", rec.get("id", "")), count))
 
     run_record = {
         "date": today.isoformat(),
@@ -1265,10 +1337,14 @@ def cmd_persona_rename(args):
 LAST_SYNC_FILE = ACTIVE_PERSONA_DIR / ".last_sync.json"
 
 SYNC_FILES = [
-    "memory.md",
-    "user-profile.md",
+    "memories.jsonl",
+    "topics.jsonl",
+    "candidates.jsonl",
+    "memory.context.md",
+    "memory.md",          # legacy, kept so pre-Memory-Insight peers stay in sync
+    "user-profile.md",    # legacy, kept so pre-Memory-Insight peers stay in sync
     "observations.jsonl",
-    "strengths.json",
+    "strengths.json",     # legacy
     "config.yaml",
 ]
 
@@ -1690,6 +1766,8 @@ def main():
     mem_strength.add_argument("keyword", help="Keyword matching the entry to strengthen")
     mem_weaken = mem_sub.add_parser("weaken", help="Reduce reinforcement on a memory")
     mem_weaken.add_argument("keyword", help="Keyword matching the entry to weaken")
+    mem_compose = mem_sub.add_parser("compose", help="Generate memory.context.md from the registry")
+    mem_compose.add_argument("--context", default=None, help="Session context text for relevance ranking")
 
     usr = sub.add_parser("user", help="Manage user profile", parents=[persona_parent])
     usr_sub = usr.add_subparsers(dest="subcommand")
@@ -1769,6 +1847,22 @@ def main():
     per_rename.add_argument("old", help="Old name")
     per_rename.add_argument("new", help="New name")
 
+    # --- Memory Insight commands ---
+    ui_p = sub.add_parser("ui", help="Launch the inspector UI", parents=[persona_parent])
+    ui_p.add_argument("--port", type=int, default=4321, help="Port (default 4321)")
+    ui_p.add_argument("--no-browser", action="store_true", help="Do not open a browser")
+
+    rtn = sub.add_parser("retention", help="Ebbinghaus retention scoring & eviction", parents=[persona_parent])
+    rtn_sub = rtn.add_subparsers(dest="subcommand")
+    rtn_sub.add_parser("score", help="Recompute retention scores & tiers")
+    rtn_ev = rtn_sub.add_parser("evict", help="Evict memories past the cold grace period")
+    rtn_ev.add_argument("--dry-run", action="store_true", help="Report without mutating")
+
+    topo = sub.add_parser("topics", help="Recurring-preference (shift) detector", parents=[persona_parent])
+    topo_sub = topo.add_subparsers(dest="subcommand")
+    topo_sub.add_parser("scan", help="Scan recent sessions for rising/falling topics")
+    topo_sub.add_parser("candidates", help="List pending candidate preferences")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -1783,6 +1877,7 @@ def main():
             "strengths": cmd_memory_strengths,
             "strengthen": cmd_memory_strengthen,
             "weaken": cmd_memory_weaken,
+            "compose": cmd_memory_compose,
         },
         "user": {
             "add": cmd_user_add,
@@ -1823,6 +1918,15 @@ def main():
             "switch": cmd_persona_switch,
             "archive": cmd_persona_archive,
             "rename": cmd_persona_rename,
+        },
+        "ui": cmd_ui,
+        "retention": {
+            "score": cmd_retention_score,
+            "evict": cmd_retention_evict,
+        },
+        "topics": {
+            "scan": cmd_topics_scan,
+            "candidates": cmd_topics_candidates,
         },
     }
 
