@@ -47,13 +47,13 @@ sys.path.insert(0, str(HERE))
 import sync_crypto as sc  # noqa: E402
 
 
-def _free_port() -> int:
+def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
-def _wait_for_health(url: str, timeout: float = 10.0) -> bool:
+def wait_for_health(url: str, timeout: float = 10.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -69,7 +69,7 @@ def _wait_for_health(url: str, timeout: float = 10.0) -> bool:
 @pytest.fixture(scope="module")
 def server():
     """Start the Fastify server on an ephemeral port; yield base URL; kill on teardown."""
-    port = _free_port()
+    port = free_port()
     data_dir = f"/tmp/autolearn-e2e-{port}"
     base_url = f"http://127.0.0.1:{port}"
     proc = subprocess.Popen(
@@ -79,7 +79,7 @@ def server():
         stderr=subprocess.STDOUT,
     )
     try:
-        if not _wait_for_health(base_url):
+        if not wait_for_health(base_url):
             output = proc.stdout.read().decode() if proc.stdout else ""
             pytest.fail(f"Server did not become healthy. Output:\n{output}")
         yield base_url
@@ -121,7 +121,7 @@ def crypto_state():
     }
 
 
-def _encrypt_file(crypto_state, rel_path, plaintext_bytes):
+def encrypt_file(crypto_state, rel_path, plaintext_bytes):
     """Helper: encrypt a file's contents the same way autolearn.py does."""
     persona_key = sc.derive_persona_key(crypto_state["master_key"], crypto_state["persona_id"])
     file_key = sc.derive_file_key(persona_key, rel_path)
@@ -132,14 +132,14 @@ def _encrypt_file(crypto_state, rel_path, plaintext_bytes):
     return record
 
 
-def _decrypt_file(crypto_state, key, nonce, ciphertext):
+def decrypt_file(crypto_state, key, nonce, ciphertext):
     """Helper: decrypt a pulled record."""
     persona_key = sc.derive_persona_key(crypto_state["master_key"], crypto_state["persona_id"])
     file_key = sc.derive_file_key(persona_key, key)
     return sc.decrypt(file_key, nonce, ciphertext)
 
 
-def _auth_headers(api_key):
+def auth_headers(api_key):
     return {"Authorization": f"Bearer {api_key}"}
 
 
@@ -148,13 +148,13 @@ def test_single_file_round_trip(server, registered, crypto_state):
     persona = crypto_state["persona_id"]
     plaintext = b"# Autolearn Memory\n\n- always use uv for Python tools\n- never use pip\n"
 
-    record = _encrypt_file(crypto_state, "memory.md", plaintext)
+    record = encrypt_file(crypto_state, "memory.md", plaintext)
 
     # Push
     push = requests.post(
         f"{server}/sync/push",
         json={"persona_id": persona, "machine_id": "test-machine", "files": [record]},
-        headers=_auth_headers(registered),
+        headers=auth_headers(registered),
         timeout=10,
     )
     assert push.status_code == 200
@@ -164,7 +164,7 @@ def test_single_file_round_trip(server, registered, crypto_state):
     pull = requests.post(
         f"{server}/sync/pull",
         json={"persona_id": persona},
-        headers=_auth_headers(registered),
+        headers=auth_headers(registered),
         timeout=10,
     )
     assert pull.status_code == 200
@@ -172,7 +172,7 @@ def test_single_file_round_trip(server, registered, crypto_state):
     assert len(files) == 1
 
     pulled = files[0]
-    decrypted = _decrypt_file(crypto_state, pulled["key"], pulled["nonce"], pulled["ciphertext"])
+    decrypted = decrypt_file(crypto_state, pulled["key"], pulled["nonce"], pulled["ciphertext"])
     assert decrypted == plaintext
 
 
@@ -186,12 +186,12 @@ def test_multi_file_push_pull(server, registered, crypto_state):
         "config.yaml": b"review_threshold: 10\n",
     }
 
-    records = [_encrypt_file(crypto_state, k, v) for k, v in files_data.items()]
+    records = [encrypt_file(crypto_state, k, v) for k, v in files_data.items()]
 
     push = requests.post(
         f"{server}/sync/push",
         json={"persona_id": persona, "machine_id": "test-machine", "files": records},
-        headers=_auth_headers(registered),
+        headers=auth_headers(registered),
         timeout=10,
     )
     assert push.status_code == 200
@@ -200,7 +200,7 @@ def test_multi_file_push_pull(server, registered, crypto_state):
     pull = requests.post(
         f"{server}/sync/pull",
         json={"persona_id": persona},
-        headers=_auth_headers(registered),
+        headers=auth_headers(registered),
         timeout=10,
     )
     pulled_files = {f["key"]: f for f in pull.json()["files"]}
@@ -208,7 +208,7 @@ def test_multi_file_push_pull(server, registered, crypto_state):
     for key, original_plaintext in files_data.items():
         assert key in pulled_files, f"missing {key} in pull response"
         pulled = pulled_files[key]
-        decrypted = _decrypt_file(crypto_state, pulled["key"], pulled["nonce"], pulled["ciphertext"])
+        decrypted = decrypt_file(crypto_state, pulled["key"], pulled["nonce"], pulled["ciphertext"])
         assert decrypted == original_plaintext, f"{key} round-trip mismatch"
 
 
@@ -218,16 +218,16 @@ def test_conflict_detection(server, registered, crypto_state):
     plaintext_new = b"newer content"
     plaintext_old = b"older content"
 
-    rec_new = _encrypt_file(crypto_state, "conflict-test.md", plaintext_new)
+    rec_new = encrypt_file(crypto_state, "conflict-test.md", plaintext_new)
     rec_new["updated_at"] = 2000
-    rec_old = _encrypt_file(crypto_state, "conflict-test.md", plaintext_old)
+    rec_old = encrypt_file(crypto_state, "conflict-test.md", plaintext_old)
     rec_old["updated_at"] = 1000
 
     # Push newer first
     push1 = requests.post(
         f"{server}/sync/push",
         json={"persona_id": persona, "machine_id": "desktop", "files": [rec_new]},
-        headers=_auth_headers(registered),
+        headers=auth_headers(registered),
         timeout=10,
     )
     assert push1.status_code == 200
@@ -237,7 +237,7 @@ def test_conflict_detection(server, registered, crypto_state):
     push2 = requests.post(
         f"{server}/sync/push",
         json={"persona_id": persona, "machine_id": "laptop", "files": [rec_old]},
-        headers=_auth_headers(registered),
+        headers=auth_headers(registered),
         timeout=10,
     )
     assert push2.status_code == 200
@@ -251,12 +251,12 @@ def test_conflict_detection(server, registered, crypto_state):
     pull = requests.post(
         f"{server}/sync/pull",
         json={"persona_id": persona},
-        headers=_auth_headers(registered),
+        headers=auth_headers(registered),
         timeout=10,
     )
     pulled = {f["key"]: f for f in pull.json()["files"]}
     assert "conflict-test.md" in pulled
-    decrypted = _decrypt_file(
+    decrypted = decrypt_file(
         crypto_state,
         "conflict-test.md",
         pulled["conflict-test.md"]["nonce"],
@@ -270,11 +270,11 @@ def test_tamper_detection_on_pull(server, registered, crypto_state):
     persona = crypto_state["persona_id"]
     plaintext = b"sensitive data"
 
-    record = _encrypt_file(crypto_state, "tamper-test.md", plaintext)
+    record = encrypt_file(crypto_state, "tamper-test.md", plaintext)
     push = requests.post(
         f"{server}/sync/push",
         json={"persona_id": persona, "machine_id": "test", "files": [record]},
-        headers=_auth_headers(registered),
+        headers=auth_headers(registered),
         timeout=10,
     )
     assert push.status_code == 200
@@ -283,7 +283,7 @@ def test_tamper_detection_on_pull(server, registered, crypto_state):
     pull = requests.post(
         f"{server}/sync/pull",
         json={"persona_id": persona},
-        headers=_auth_headers(registered),
+        headers=auth_headers(registered),
         timeout=10,
     )
     pulled = {f["key"]: f for f in pull.json()["files"]}
@@ -295,7 +295,7 @@ def test_tamper_detection_on_pull(server, registered, crypto_state):
     tampered_ct = base64.b64encode(bytes(raw)).decode("ascii")
 
     with pytest.raises(sc.TamperError):
-        _decrypt_file(
+        decrypt_file(
             crypto_state,
             "tamper-test.md",
             pulled["tamper-test.md"]["nonce"],
@@ -308,7 +308,7 @@ def test_status_reflects_pushed_files(server, registered, crypto_state):
     persona = crypto_state["persona_id"]
     status = requests.get(
         f"{server}/sync/status",
-        headers=_auth_headers(registered),
+        headers=auth_headers(registered),
         timeout=10,
     )
     assert status.status_code == 200

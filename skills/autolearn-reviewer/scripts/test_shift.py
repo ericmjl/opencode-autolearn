@@ -7,20 +7,20 @@ import registry as R
 from pathlib import Path
 
 
-def _persona(tmp_path: Path) -> Path:
+def persona(tmp_path: Path) -> Path:
     p = tmp_path / "default"
     p.mkdir()
     return p
 
 
 def test_is_candidate_utterance():
-    assert S._is_candidate_utterance("never use pip3 for this")
-    assert S._is_candidate_utterance("always run tests before commit")
-    assert not S._is_candidate_utterance("what time is it")
+    assert S.is_candidate_utterance("never use pip3 for this")
+    assert S.is_candidate_utterance("always run tests before commit")
+    assert not S.is_candidate_utterance("what time is it")
 
 
 def test_record_sightings_idempotent(tmp_path):
-    p = _persona(tmp_path)
+    p = persona(tmp_path)
     n1 = S.record_sightings(["never use pip3"], "sess-a", "2026-06-01", p)
     n2 = S.record_sightings(["never use pip3"], "sess-a", "2026-06-01", p)
     assert n1 == 1 and n2 == 0
@@ -41,19 +41,19 @@ def test_sw_ema_handcheck(tmp_path):
 def test_scan_creates_rising_candidate(tmp_path):
     # The literal "I keep saying this" case: same utterance across sessions
     # (steady recurrence, divergence≈0) must still fire via the recurrence floor.
-    p = _persona(tmp_path)
+    p = persona(tmp_path)
     S.record_sightings(["never commit secrets"], "s1", "2026-06-01", p)
     S.record_sightings(["never commit secrets"], "s2", "2026-06-10", p)
     S.record_sightings(["never commit secrets"], "s3", "2026-06-20", p)
     reg = R.MemoryRegistry(p)
     S.scan(reg, p, now="2026-06-25")
-    cands = [c for c in S._load_candidates(p) if c["status"] == "pending"]
+    cands = [c for c in S.load_candidates(p) if c["status"] == "pending"]
     assert len(cands) == 1
     assert cands[0]["direction"] == "rising"
 
 
 def test_scan_auto_reinforces_existing_memory(tmp_path):
-    p = _persona(tmp_path)
+    p = persona(tmp_path)
     reg = R.MemoryRegistry(p)
     rec = reg.add("never commit secrets or api keys")  # topic tokens overlap the sightings
     before = len(reg.get(rec["id"])["reinforcements"])

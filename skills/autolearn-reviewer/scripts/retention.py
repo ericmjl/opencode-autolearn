@@ -28,23 +28,23 @@ DEFAULT_CONFIG = {
 }
 
 
-def _today() -> str:
+def today() -> str:
     return date.today().isoformat()
 
 
-def _parse_date(s: str) -> date:
+def parse_date(s: str) -> date:
     return datetime.fromisoformat(s).date()
 
 
-def _days_between(a_iso: str, b_iso: str) -> int:
+def days_between(a_iso: str, b_iso: str) -> int:
     try:
-        return (_parse_date(b_iso) - _parse_date(a_iso)).days
+        return (parse_date(b_iso) - parse_date(a_iso)).days
     except (ValueError, TypeError):
         return 0
 
 
 # @spec MI-RTN-002
-def _salience(record: dict, config: dict) -> float:
+def compute_salience(record: dict, config: dict) -> float:
     base = (
         config["retention_salience_memory"]
         if record.get("type") == "memory"
@@ -56,19 +56,19 @@ def _salience(record: dict, config: dict) -> float:
 
 # @spec MI-RTN-001, MI-RTN-003
 def compute_score(record: dict, config: dict = DEFAULT_CONFIG, now: str | None = None) -> float:
-    now = now or _today()
+    now = now or today()
     created = record.get("created_at") or now
-    days_since_created = max(0, _days_between(created, now))
+    days_since_created = max(0, days_between(created, now))
     temporal = math.exp(-config["retention_lambda"] * days_since_created)
 
     boost = 0.0
     for when in record.get("reinforcements") or []:
-        d = _days_between(when, now)
+        d = days_between(when, now)
         if d > 0:  # MI-RTN-003: skip 0-day to avoid div-by-zero
             boost += 1.0 / d
     boost *= config["retention_sigma"]
 
-    salience = _salience(record, config)
+    salience = compute_salience(record, config)
     return min(1.0, salience * temporal + boost)
 
 
@@ -86,7 +86,7 @@ def tier_of(score: float, config: dict = DEFAULT_CONFIG) -> str:
 # @spec MI-RTN-005
 def score_all(registry_obj: MemoryRegistry, config: dict = DEFAULT_CONFIG,
               now: str | None = None) -> dict:
-    now = now or _today()
+    now = now or today()
     summary = {"total": 0, "hot": 0, "warm": 0, "cold": 0, "evictable": 0}
     for rec in registry_obj.load_active():
         score = compute_score(rec, config, now)
@@ -103,7 +103,7 @@ def score_all(registry_obj: MemoryRegistry, config: dict = DEFAULT_CONFIG,
 # @spec MI-RTN-006
 def eviction_candidates(registry_obj: MemoryRegistry, config: dict = DEFAULT_CONFIG,
                         now: str | None = None) -> list[dict]:
-    now = now or _today()
+    now = now or today()
     out = []
     for rec in registry_obj.load_active():
         score = rec.get("retention_score")
@@ -112,7 +112,7 @@ def eviction_candidates(registry_obj: MemoryRegistry, config: dict = DEFAULT_CON
         if tier_of(score, config) != "evictable":
             continue
         last = rec.get("last_reinforced") or rec.get("created_at") or now
-        if _days_between(last, now) >= config["eviction_grace_days"]:
+        if days_between(last, now) >= config["eviction_grace_days"]:
             out.append(rec)
     return out
 
@@ -120,7 +120,7 @@ def eviction_candidates(registry_obj: MemoryRegistry, config: dict = DEFAULT_CON
 # @spec MI-RTN-007
 def evict(registry_obj: MemoryRegistry, config: dict = DEFAULT_CONFIG,
           now: str | None = None, dry_run: bool = False) -> dict:
-    now = now or _today()
+    now = now or today()
     cands = eviction_candidates(registry_obj, config, now)
     if not dry_run:
         for rec in cands:
@@ -135,11 +135,11 @@ def evict(registry_obj: MemoryRegistry, config: dict = DEFAULT_CONFIG,
 # @spec MI-RTN-009
 def curve_points(record: dict, config: dict = DEFAULT_CONFIG, days: int = 90) -> list[tuple[str, float]]:
     """Retention-over-time samples from created_at forward, modelling reinforcement bumps."""
-    created = record.get("created_at") or _today()
+    created = record.get("created_at") or today()
     try:
-        start = _parse_date(created)
+        start = parse_date(created)
     except (ValueError, TypeError):
-        start = _parse_date(_today())
+        start = parse_date(today())
     reinforcements = sorted(record.get("reinforcements") or [])
     samples: list[tuple[str, float]] = []
     n = max(1, min(days, 365))
@@ -148,10 +148,10 @@ def curve_points(record: dict, config: dict = DEFAULT_CONFIG, days: int = 90) ->
         asof = (start + timedelta(days=i)).isoformat()
         if i == 0 and not reinforcements:
             # at creation, before any reinforcement: base salience*temporal(=1)
-            score = min(1.0, _salience(record, config) * 1.0)
+            score = min(1.0, compute_salience(record, config) * 1.0)
         else:
             effective = dict(record)
-            effective["reinforcements"] = [r for r in reinforcements if _days_between(r, asof) >= 0 and r <= asof]
+            effective["reinforcements"] = [r for r in reinforcements if days_between(r, asof) >= 0 and r <= asof]
             score = compute_score(effective, config, now=asof)
         samples.append((asof, round(score, 4)))
         if len(samples) >= 30:
@@ -161,7 +161,7 @@ def curve_points(record: dict, config: dict = DEFAULT_CONFIG, days: int = 90) ->
     return samples
 
 
-def _registry_for(args) -> MemoryRegistry:
+def registry_for(args) -> MemoryRegistry:
     home = Path(os.environ.get("AUTOLEARN_HOME", Path.home() / ".autolearn"))
     persona = getattr(args, "persona", None) or "default"
     return MemoryRegistry(home / "personas" / persona)
@@ -169,7 +169,7 @@ def _registry_for(args) -> MemoryRegistry:
 
 # @spec MI-RTN-005
 def cmd_retention_score(args):
-    reg = _registry_for(args)
+    reg = registry_for(args)
     summary = score_all(reg)
     print(f"Scored {summary['total']} active memories:")
     for tier in ("hot", "warm", "cold", "evictable"):
@@ -178,7 +178,7 @@ def cmd_retention_score(args):
 
 # @spec MI-RTN-007
 def cmd_retention_evict(args):
-    reg = _registry_for(args)
+    reg = registry_for(args)
     result = evict(reg, dry_run=bool(getattr(args, "dry_run", False)))
     label = "would evict" if result["dry_run"] else "evicted"
     print(f"{label} {result['evicted']} memories:")

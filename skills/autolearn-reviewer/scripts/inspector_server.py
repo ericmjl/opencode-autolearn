@@ -22,14 +22,14 @@ from registry import MemoryRegistry
 DEFAULT_PORT = 4321
 
 
-def _persona_dir(args=None) -> Path:
+def resolve_persona_dir(args=None) -> Path:
     home = Path(os.environ.get("AUTOLEARN_HOME", Path.home() / ".autolearn"))
     persona = (getattr(args, "persona", None) or "default") if args else "default"
     return home / "personas" / persona
 
 
 # Defensive imports — these modules may be absent in stripped-down envs.
-def _curve(record: dict) -> list[list]:
+def curve(record: dict) -> list[list]:
     try:
         import retention  # type: ignore
         pts = retention.curve_points(record)
@@ -38,7 +38,7 @@ def _curve(record: dict) -> list[list]:
         return []
 
 
-def _rescore(record: dict) -> dict:
+def rescore(record: dict) -> dict:
     try:
         import retention  # type: ignore
         record["retention_score"] = round(retention.compute_score(record), 4)
@@ -49,14 +49,14 @@ def _rescore(record: dict) -> dict:
     return record
 
 
-def _trend(record: dict) -> str:
+def trend(record: dict) -> str:
     reinf = record.get("reinforcements") or []
     if len(reinf) < 2:
         return "steady"
     return "rising"
 
 
-def _load_candidates(pdir: Path, status: str | None) -> list[dict]:
+def load_candidates(pdir: Path, status: str | None) -> list[dict]:
     path = pdir / "candidates.jsonl"
     if not path.exists():
         return []
@@ -75,7 +75,7 @@ def _load_candidates(pdir: Path, status: str | None) -> list[dict]:
     return out
 
 
-def _save_candidates(pdir: Path, candidates: list[dict]) -> None:
+def save_candidates(pdir: Path, candidates: list[dict]) -> None:
     path = pdir / "candidates.jsonl"
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as fh:
@@ -84,7 +84,7 @@ def _save_candidates(pdir: Path, candidates: list[dict]) -> None:
     os.replace(tmp, path)
 
 
-def _load_skills(pdir: Path) -> dict:
+def load_skills(pdir: Path) -> dict:
     path = pdir / "skills" / ".usage.json"
     if not path.exists():
         return {}
@@ -94,7 +94,7 @@ def _load_skills(pdir: Path) -> dict:
         return {}
 
 
-def _load_activity(pdir: Path, n: int = 50) -> list[dict]:
+def load_activity(pdir: Path, n: int = 50) -> list[dict]:
     path = pdir / "observations.jsonl"
     if not path.exists():
         return []
@@ -136,9 +136,9 @@ def handle_request(method: str, path: str, body: bytes, persona_dir: Path):
                 unscored += 1
             elif t in tiers:
                 tiers[t] += 1
-        pending = _load_candidates(persona_dir, "pending")
-        learned = _load_candidates(persona_dir, "learned")
-        return _json({
+        pending = load_candidates(persona_dir, "pending")
+        learned = load_candidates(persona_dir, "learned")
+        return json_response({
             "total": len([r for r in records if r.get("status") != "evicted"]),
             "tiers": tiers,
             "pending_candidates": len(pending),
@@ -160,66 +160,66 @@ def handle_request(method: str, path: str, body: bytes, persona_dir: Path):
                 "tier": r.get("tier"),
                 "strength": len(r.get("reinforcements") or []),
                 "last_reinforced": r.get("last_reinforced"),
-                "trend": _trend(r),
+                "trend": trend(r),
                 "status": r.get("status"),
             })
-        return _json(rows)
+        return json_response(rows)
 
     if method == "GET" and route.startswith("/api/memory/"):
         mid = route.rsplit("/", 1)[-1]
         rec = reg.get(mid)
         if rec is None:
             return 404, "application/json", b'{"error":"not found"}'
-        rec["curve"] = _curve(rec)
-        return _json(rec)
+        rec["curve"] = curve(rec)
+        return json_response(rec)
 
     if method == "GET" and route == "/api/candidates":
-        return _json(_load_candidates(persona_dir, "pending"))
+        return json_response(load_candidates(persona_dir, "pending"))
 
     if method == "GET" and route == "/api/learned":
-        return _json(_load_candidates(persona_dir, "learned"))
+        return json_response(load_candidates(persona_dir, "learned"))
 
     if method == "GET" and route == "/api/skills":
-        return _json(_load_skills(persona_dir))
+        return json_response(load_skills(persona_dir))
 
     if method == "GET" and route == "/api/activity":
-        return _json(_load_activity(persona_dir))
+        return json_response(load_activity(persona_dir))
 
     if method == "POST" and route.startswith("/api/memory/") and route.endswith("/strengthen"):
         mid = route.split("/")[3]
         rec = reg.reinforce(mid)
         if rec is None:
             return 404, "application/json", b'{"error":"not found"}'
-        rec = _rescore(reg.get(mid) or rec)
+        rec = rescore(reg.get(mid) or rec)
         reg.update(rec)
-        return _json({"ok": True, "record": rec})
+        return json_response({"ok": True, "record": rec})
 
     if method == "POST" and route.startswith("/api/candidate/") and route.endswith("/confirm"):
         cid = route.split("/")[3]
-        cands = _load_candidates(persona_dir, None)
+        cands = load_candidates(persona_dir, None)
         target = next((c for c in cands if c.get("id") == cid), None)
         if target is None:
             return 404, "application/json", b'{"error":"not found"}'
         text = " ".join(target.get("tokens") or []) or (target.get("utterances") or [""])[0]
         reg.add(text, type="memory")
         target["status"] = "confirmed"
-        _save_candidates(persona_dir, cands)
-        return _json({"ok": True})
+        save_candidates(persona_dir, cands)
+        return json_response({"ok": True})
 
     if method == "POST" and route.startswith("/api/candidate/") and route.endswith("/dismiss"):
         cid = route.split("/")[3]
-        cands = _load_candidates(persona_dir, None)
+        cands = load_candidates(persona_dir, None)
         target = next((c for c in cands if c.get("id") == cid), None)
         if target is None:
             return 404, "application/json", b'{"error":"not found"}'
         target["status"] = "dismissed"
-        _save_candidates(persona_dir, cands)
-        return _json({"ok": True})
+        save_candidates(persona_dir, cands)
+        return json_response({"ok": True})
 
     return 404, "application/json", b'{"error":"no route"}'
 
 
-def _json(obj) -> tuple[int, str, bytes]:
+def json_response(obj) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
 
@@ -227,7 +227,7 @@ def _json(obj) -> tuple[int, str, bytes]:
 # Server
 # ---------------------------------------------------------------------------
 
-def _find_free_port(start: int, attempts: int = 10) -> int:
+def find_free_port(start: int, attempts: int = 10) -> int:
     for p in range(start, start + attempts):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
@@ -240,14 +240,14 @@ def _find_free_port(start: int, attempts: int = 10) -> int:
 
 def serve(port: int = DEFAULT_PORT, persona_dir: Path | None = None,
           open_browser: bool = True) -> None:
-    persona_dir = persona_dir or _persona_dir()
-    chosen = _find_free_port(port)
+    persona_dir = persona_dir or resolve_persona_dir()
+    chosen = find_free_port(port)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # silence default logging
             pass
 
-        def _dispatch(self, method: str):
+        def dispatch(self, method: str):
             length = int(self.headers.get("Content-Length", 0) or 0)
             body = self.rfile.read(length) if length else b""
             status, ctype, payload = handle_request(method, self.path, body, persona_dir)
@@ -259,10 +259,10 @@ def serve(port: int = DEFAULT_PORT, persona_dir: Path | None = None,
             self.wfile.write(payload)
 
         def do_GET(self):
-            self._dispatch("GET")
+            self.dispatch("GET")
 
         def do_POST(self):
-            self._dispatch("POST")
+            self.dispatch("POST")
 
     url = f"http://127.0.0.1:{chosen}/"
     print(f"Inspector UI running at {url}")
@@ -283,7 +283,7 @@ def serve(port: int = DEFAULT_PORT, persona_dir: Path | None = None,
 def cmd_ui(args):
     port = getattr(args, "port", DEFAULT_PORT) or DEFAULT_PORT
     open_browser = not bool(getattr(args, "no_browser", False))
-    pdir = _persona_dir(args)
+    pdir = resolve_persona_dir(args)
     serve(port=port, persona_dir=pdir, open_browser=open_browser)
 
 

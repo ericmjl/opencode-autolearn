@@ -197,7 +197,7 @@ def keychain_available() -> bool:
         return False
 
 
-_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 
 def to_base58(data: bytes) -> str:
@@ -208,7 +208,7 @@ def to_base58(data: bytes) -> str:
     chars = []
     while n > 0:
         n, rem = divmod(n, 58)
-        chars.append(_BASE58_ALPHABET[rem])
+        chars.append(BASE58_ALPHABET[rem])
     leading_zeros = 0
     for byte in data:
         if byte == 0:
@@ -224,7 +224,7 @@ def from_base58(text: str) -> bytes:
         return b""
     n = 0
     for char in text:
-        digit = _BASE58_ALPHABET.find(char)
+        digit = BASE58_ALPHABET.find(char)
         if digit == -1:
             raise ValueError(f"invalid base58 character: {char!r}")
         n = n * 58 + digit

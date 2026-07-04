@@ -10,7 +10,7 @@ import pytest
 import registry as R
 
 
-def _persona(tmp_path: Path) -> Path:
+def persona(tmp_path: Path) -> Path:
     p = tmp_path / "default"
     p.mkdir()
     return p
@@ -30,7 +30,7 @@ def test_topic_signature_stable():
 
 
 def test_add_find_reinforce(tmp_path):
-    reg = R.MemoryRegistry(_persona(tmp_path))
+    reg = R.MemoryRegistry(persona(tmp_path))
     rec = reg.add("Never use pip3; use uv tool", type="memory")
     assert reg.find_by_text("Never use pip3; use uv tool")["id"] == rec["id"]
     # distinct days each count as a reinforcement
@@ -43,7 +43,7 @@ def test_add_find_reinforce(tmp_path):
 
 
 def test_reinforce_same_day_dedup(tmp_path):
-    reg = R.MemoryRegistry(_persona(tmp_path))
+    reg = R.MemoryRegistry(persona(tmp_path))
     rec = reg.add("dedup me")
     reg.reinforce(rec["id"], when="2026-06-01")
     reg.reinforce(rec["id"], when="2026-06-01")  # same day → deduped
@@ -51,7 +51,7 @@ def test_reinforce_same_day_dedup(tmp_path):
 
 
 def test_reinforce_revives_evicted(tmp_path):
-    reg = R.MemoryRegistry(_persona(tmp_path))
+    reg = R.MemoryRegistry(persona(tmp_path))
     rec = reg.add("prefers concise responses")
     reg.set_status(rec["id"], "evicted", "2026-01-01")
     assert reg.get(rec["id"])["status"] == "evicted"
@@ -61,7 +61,7 @@ def test_reinforce_revives_evicted(tmp_path):
 
 
 def test_save_atomic_and_load_active(tmp_path):
-    reg = R.MemoryRegistry(_persona(tmp_path))
+    reg = R.MemoryRegistry(persona(tmp_path))
     a = reg.add("active one")
     b = reg.add("to evict")
     reg.set_status(b["id"], "evicted", "2026-01-01")
@@ -72,7 +72,7 @@ def test_save_atomic_and_load_active(tmp_path):
 
 
 def test_corrupt_line_skipped(tmp_path):
-    reg = R.MemoryRegistry(_persona(tmp_path))
+    reg = R.MemoryRegistry(persona(tmp_path))
     reg.add("good entry")
     with reg.path.open("a", encoding="utf-8") as fh:
         fh.write("{not valid json\n")
@@ -81,7 +81,7 @@ def test_corrupt_line_skipped(tmp_path):
 
 
 def test_migration_from_legacy(tmp_path):
-    p = _persona(tmp_path)
+    p = persona(tmp_path)
     (p / "memory.md").write_text(
         "# Autolearn Memory\n\n<!-- Managed by autolearn. -->\n\n"
         "- Always use uv for python tools\n"
@@ -116,7 +116,7 @@ def test_migration_from_legacy(tmp_path):
 
 
 def test_update_and_remove(tmp_path):
-    reg = R.MemoryRegistry(_persona(tmp_path))
+    reg = R.MemoryRegistry(persona(tmp_path))
     rec = reg.add("a rule")
     rec["retention_score"] = 0.9
     rec["tier"] = "hot"

@@ -28,7 +28,7 @@ LEGACY_MARKER = ".registry_migrated"  # idempotency marker for migrate_from_lega
 ID_MAX_LEN = 60
 
 # Minimal English stopword set — no external dependency for topic extraction.
-_STOPWORDS = {
+STOPWORDS = {
     "a", "an", "the", "and", "or", "but", "if", "then", "else", "when", "at",
     "by", "for", "with", "about", "against", "between", "into", "through",
     "during", "before", "after", "above", "below", "to", "from", "up", "down",
@@ -53,7 +53,7 @@ def slugify_text(text: str) -> str:
     return slug or "memory"
 
 
-def _tokenize(text: str) -> list[str]:
+def tokenize(text: str) -> list[str]:
     """Lowercase alphanumeric tokens (>=2 chars)."""
     return [t for t in re.findall(r"[a-z0-9]+", text.lower()) if len(t) >= 2]
 
@@ -63,8 +63,8 @@ def extract_topics(text: str) -> list[str]:
     """Topic tokens: lowercased, punctuation/stopword-stripped, de-duplicated, order-preserving."""
     out: list[str] = []
     seen: set[str] = set()
-    for tok in _tokenize(text):
-        if tok in _STOPWORDS:
+    for tok in tokenize(text):
+        if tok in STOPWORDS:
             continue
         if tok in seen:
             continue
@@ -84,7 +84,7 @@ def topic_signature(text: str) -> tuple[str, list[str]]:
     return sig, topics
 
 
-def _extract_md_entries(md: str) -> list[str]:
+def extract_md_entries(md: str) -> list[str]:
     """Reproduced legacy markdown-entry parser (self-contained; no autolearn import).
 
     Skips HTML comments and headings, strips ``- `` / ``* `` list prefixes.
@@ -108,11 +108,11 @@ def _extract_md_entries(md: str) -> list[str]:
     return entries
 
 
-def _today() -> str:
+def today() -> str:
     return date.today().isoformat()
 
 
-def _new_record(
+def new_record(
     text: str,
     type_: str,
     *,
@@ -121,7 +121,7 @@ def _new_record(
     created_at: str | None = None,
     reinforcements: list[str] | None = None,
 ) -> dict:
-    created = created_at or _today()
+    created = created_at or today()
     reinf = list(reinforcements or [])
     return {
         "id": slugify_text(text),
@@ -173,7 +173,7 @@ class MemoryRegistry:
                 try:
                     records.append(json.loads(line))
                 except json.JSONDecodeError:
-                    _debug_log(self.persona_dir, f"skipping corrupt line {lineno}")
+                    debug_log(self.persona_dir, f"skipping corrupt line {lineno}")
         return records
 
     def load_active(self) -> list[dict]:
@@ -200,7 +200,7 @@ class MemoryRegistry:
         existing = self.find_by_text(text)
         if existing is not None:
             return existing
-        rec = _new_record(text, type, pinned=pinned, topics=topics)
+        rec = new_record(text, type, pinned=pinned, topics=topics)
         records = self.load()
         records.append(rec)
         self.save(records)
@@ -212,7 +212,7 @@ class MemoryRegistry:
         rec = next((r for r in records if r.get("id") == id), None)
         if rec is None:
             return None
-        when = when or _today()
+        when = when or today()
         reinf = rec.setdefault("reinforcements", [])
         if not reinf or reinf[-1] != when:
             reinf.append(when)
@@ -318,7 +318,7 @@ def migrate_from_legacy(persona_dir: Path) -> int:
     skips = 0
     mtime_fallback = None
 
-    def _mtime_fallback() -> str | None:
+    def resolve_mtime_fallback() -> str | None:
         nonlocal mtime_fallback
         if mtime_fallback is None and memory_md.exists():
             ts = memory_md.stat().st_mtime
@@ -329,15 +329,15 @@ def migrate_from_legacy(persona_dir: Path) -> int:
     for source_file, type_ in ((memory_md, "memory"), (user_md, "user")):
         if not source_file.exists():
             continue
-        for entry in _extract_md_entries(source_file.read_text(encoding="utf-8")):
+        for entry in extract_md_entries(source_file.read_text(encoding="utf-8")):
             if not entry.strip():
                 continue
-            rec = _new_record(entry, type_)
+            rec = new_record(entry, type_)
             if rec["id"] in seen_ids:
                 continue
             s = match_strength(entry)
             if s is not None:
-                first = s.get("first_seen") or _mtime_fallback() or _today()
+                first = s.get("first_seen") or resolve_mtime_fallback() or today()
                 rec["created_at"] = first
                 count = int(s.get("count", 1))
                 last = s.get("last_seen") or first
@@ -345,7 +345,7 @@ def migrate_from_legacy(persona_dir: Path) -> int:
                 rec["reinforcements"] = [last] * max(0, count - 1)
                 rec["last_reinforced"] = last or first
             else:
-                rec["created_at"] = _mtime_fallback() or _today()
+                rec["created_at"] = resolve_mtime_fallback() or today()
             seen_ids.add(rec["id"])
             records.append(rec)
 
@@ -365,11 +365,11 @@ def migrate_from_legacy(persona_dir: Path) -> int:
         except OSError:
             pass  # leave original in place rather than risk data loss
 
-    marker.write_text(_today() + f"\n# migrated {len(records)} records, skipped {skips} orphans\n")
+    marker.write_text(today() + f"\n# migrated {len(records)} records, skipped {skips} orphans\n")
     return len(records)
 
 
-def _debug_log(persona_dir: Path, msg: str) -> None:
+def debug_log(persona_dir: Path, msg: str) -> None:
     """Best-effort debug log alongside the autolearn debug.log convention."""
     try:
         with (Path.home() / ".autolearn" / "debug.log").open("a", encoding="utf-8") as fh:

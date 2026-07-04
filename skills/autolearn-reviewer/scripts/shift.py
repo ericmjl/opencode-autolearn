@@ -32,36 +32,36 @@ CUE_WORDS = {
     "don't", "dont", "never", "always", "should", "prefer", "again", "keep",
     "stop", "wrong", "instead", "rather", "use", "avoid",
 }
-_LEAD_RE = __import__("re").compile(r"^\s*(use|don't|dont|never|always|stop|avoid)\b", __import__("re").IGNORECASE)
+LEAD_RE = __import__("re").compile(r"^\s*(use|don't|dont|never|always|stop|avoid)\b", __import__("re").IGNORECASE)
 
 TOPICS_FILE = "topics.jsonl"
 CANDIDATES_FILE = "candidates.jsonl"
 
 
-def _today() -> str:
+def today() -> str:
     return date.today().isoformat()
 
 
 # @spec MI-SFT-001
-def _is_candidate_utterance(text: str) -> bool:
+def is_candidate_utterance(text: str) -> bool:
     if not text:
         return False
     lower = text.lower()
-    if _LEAD_RE.match(text):
+    if LEAD_RE.match(text):
         return True
     toks = set(__import__("re").findall(r"[a-z']+", lower))
     return bool(toks & CUE_WORDS)
 
 
-def _topics_path(persona_dir: Path) -> Path:
+def topics_path(persona_dir: Path) -> Path:
     return Path(persona_dir) / TOPICS_FILE
 
 
-def _candidates_path(persona_dir: Path) -> Path:
+def candidates_path(persona_dir: Path) -> Path:
     return Path(persona_dir) / CANDIDATES_FILE
 
 
-def _load_jsonl(path: Path) -> list[dict]:
+def load_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
     out = []
@@ -80,14 +80,14 @@ def _load_jsonl(path: Path) -> list[dict]:
 # @spec MI-SFT-002, MI-SFT-003
 def record_sightings(messages: list[str], session_id: str, when: str,
                      persona_dir: Path) -> int:
-    path = _topics_path(persona_dir)
-    existing = _load_jsonl(path)
+    path = topics_path(persona_dir)
+    existing = load_jsonl(path)
     already = {(r["topic_sig"], r["session_id"]) for r in existing}
 
     counts: dict[str, dict] = {}
     order: list[str] = []
     for msg in messages:
-        if not _is_candidate_utterance(msg):
+        if not is_candidate_utterance(msg):
             continue
         sig, tokens = topic_signature(msg)
         if sig not in counts:
@@ -133,19 +133,19 @@ def compute_sw_ema(sightings_for_sig: list[dict], config: dict = DEFAULT_CONFIG)
     return (sw, ema)
 
 
-def _jaccard(a: list[str], b: list[str]) -> float:
+def jaccard(a: list[str], b: list[str]) -> float:
     sa, sb = set(a), set(b)
     if not sa or not sb:
         return 0.0
     return len(sa & sb) / len(sa | sb)
 
 
-def _load_candidates(persona_dir: Path) -> list[dict]:
-    return _load_jsonl(_candidates_path(persona_dir))
+def load_candidates(persona_dir: Path) -> list[dict]:
+    return load_jsonl(candidates_path(persona_dir))
 
 
-def _save_candidates(persona_dir: Path, candidates: list[dict]) -> None:
-    path = _candidates_path(persona_dir)
+def save_candidates(persona_dir: Path, candidates: list[dict]) -> None:
+    path = candidates_path(persona_dir)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         for c in candidates:
@@ -156,13 +156,13 @@ def _save_candidates(persona_dir: Path, candidates: list[dict]) -> None:
 # @spec MI-SFT-004, MI-SFT-005, MI-SFT-006, MI-SFT-007, MI-SFT-008, MI-SFT-009
 def scan(reg: MemoryRegistry, persona_dir: Path, config: dict = DEFAULT_CONFIG,
          now: str | None = None) -> list[dict]:
-    now = now or _today()
-    sightings = _load_jsonl(_topics_path(persona_dir))
+    now = now or today()
+    sightings = load_jsonl(topics_path(persona_dir))
     by_sig: dict[str, list[dict]] = {}
     for s in sightings:
         by_sig.setdefault(s["topic_sig"], []).append(s)
 
-    candidates = _load_candidates(persona_dir)
+    candidates = load_candidates(persona_dir)
     by_csig = {c["topic_sig"]: c for c in candidates}
     changed: list[dict] = []
 
@@ -193,7 +193,7 @@ def scan(reg: MemoryRegistry, persona_dir: Path, config: dict = DEFAULT_CONFIG,
             # MI-SFT-007: auto-reinforce a matching memory
             match = None
             for rec in active:
-                if _jaccard(rec.get("topics") or [], tokens) >= 0.5:
+                if jaccard(rec.get("topics") or [], tokens) >= 0.5:
                     match = rec
                     break
             if match is not None:
@@ -243,11 +243,11 @@ def scan(reg: MemoryRegistry, persona_dir: Path, config: dict = DEFAULT_CONFIG,
         for c in pending[: len(pending) - config["shift_max_candidates"]]:
             c["status"] = "dismissed"
 
-    _save_candidates(persona_dir, candidates)
+    save_candidates(persona_dir, candidates)
     return changed
 
 
-def _registry_for(args) -> tuple[MemoryRegistry, Path]:
+def registry_for(args) -> tuple[MemoryRegistry, Path]:
     home = Path(os.environ.get("AUTOLEARN_HOME", Path.home() / ".autolearn"))
     persona = getattr(args, "persona", None) or "default"
     pdir = home / "personas" / persona
@@ -256,7 +256,7 @@ def _registry_for(args) -> tuple[MemoryRegistry, Path]:
 
 # @spec MI-SFT-010
 def cmd_topics_scan(args):
-    reg, pdir = _registry_for(args)
+    reg, pdir = registry_for(args)
     changed = scan(reg, pdir)
     if not changed:
         print("No new/updated candidates.")
@@ -267,8 +267,8 @@ def cmd_topics_scan(args):
 
 # @spec MI-SFT-011
 def cmd_topics_candidates(args):
-    _reg, pdir = _registry_for(args)
-    pending = [c for c in _load_candidates(pdir) if c.get("status") == "pending"]
+    _reg, pdir = registry_for(args)
+    pending = [c for c in load_candidates(pdir) if c.get("status") == "pending"]
     if not pending:
         print("No pending candidates.")
     for c in pending:

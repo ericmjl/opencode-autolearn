@@ -17,10 +17,10 @@ from registry import MemoryRegistry
 
 DEFAULT_CONFIG = {"context_budget_chars": 3000}
 
-_HEADER = "# Autolearn Memory\n\n<!-- Managed by autolearn. Do not edit the structure. -->\n\n"
+HEADER = "# Autolearn Memory\n\n<!-- Managed by autolearn. Do not edit the structure. -->\n\n"
 
 
-def _tokens(text_or_list) -> set[str]:
+def tokens(text_or_list) -> set[str]:
     if isinstance(text_or_list, (list, tuple, set)):
         text = " ".join(str(t) for t in text_or_list)
     else:
@@ -32,7 +32,7 @@ def _tokens(text_or_list) -> set[str]:
 def relevance(record: dict, ctx_tokens: set[str]) -> float:
     if not ctx_tokens:
         return 0.0
-    record_tokens = set(record.get("topics") or []) | _tokens(record.get("text", ""))
+    record_tokens = set(record.get("topics") or []) | tokens(record.get("text", ""))
     if not record_tokens:
         return 0.0
     inter = len(record_tokens & ctx_tokens)
@@ -40,7 +40,7 @@ def relevance(record: dict, ctx_tokens: set[str]) -> float:
     return inter / union if union else 0.0
 
 
-def _retention(record: dict) -> float:
+def retention(record: dict) -> float:
     score = record.get("retention_score")
     return 0.5 if score is None else float(score)
 
@@ -50,33 +50,33 @@ def compose(registry_obj: MemoryRegistry, ctx_tokens: set[str],
             config: dict = DEFAULT_CONFIG) -> str:
     records = registry_obj.load_active()
     if not records:
-        return _HEADER  # MI-CMP-008
+        return HEADER  # MI-CMP-008
 
     pinned = [r for r in records if r.get("pinned")]
     others = [r for r in records if not r.get("pinned")]
 
     has_ctx = bool(ctx_tokens)
     others.sort(
-        key=lambda r: (relevance(r, ctx_tokens) * _retention(r)) if has_ctx else _retention(r),
+        key=lambda r: (relevance(r, ctx_tokens) * retention(r)) if has_ctx else retention(r),
         reverse=True,
     )
 
     budget = config["context_budget_chars"]
-    header_len = len(_HEADER)
+    header_len = len(HEADER)
     used = header_len
     chosen: list[dict] = list(pinned)  # MI-CMP-003: pinned first, always
 
-    def _entry_len(text: str) -> int:
+    def entry_len(text: str) -> int:
         return len(f"- {text}\n")
 
     for rec in others:
-        cost = _entry_len(rec.get("text", ""))
+        cost = entry_len(rec.get("text", ""))
         if used + cost > budget:
             continue  # MI-CMP-004/005: respect budget for non-pinned
         chosen.append(rec)
         used += cost
 
-    out = _HEADER
+    out = HEADER
     for rec in chosen:  # pinned then ranked
         out += f"- {rec.get('text', '')}\n"
     return out
@@ -90,7 +90,7 @@ def cmd_compose(args):
     reg = MemoryRegistry(persona_dir)
 
     ctx = getattr(args, "context", None)
-    ctx_tokens = _tokens(ctx) if ctx else set()
+    ctx_tokens = tokens(ctx) if ctx else set()
 
     md = compose(reg, ctx_tokens)
     out_path = persona_dir / "memory.context.md"

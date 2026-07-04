@@ -42,18 +42,37 @@ action by writing to files.
    "note this for next time"
 6. **Workarounds that worked**: non-obvious techniques, debugging paths,
    fixes that resolved an issue
+7. **Token-efficiency mandate (proactive, always act)**: the PURPOSE of
+   recording memories, updating the user profile, and creating/patching skills
+   is to make FUTURE interactions LESS token-heavy by shortcutting repetitive
+   or expensive discovery paths. Actively scan EVERY conversation for
+   EXPENSIVE DISCOVERY that was performed but not yet distilled into a reusable
+   artifact: walking a CLI's `--help` 2-3 subcommands deep before finding the
+   right invocation; trial-and-error probing of an API/library surface;
+   re-reading the same docs/README/source across sessions; a multi-step
+   diagnostic chain that converged on a known fix. When you see one, record a
+   memory OR create/patch a skill so the NEXT session reaches the answer
+   directly instead of re-exploring. Ask on every review: "did this session
+   spend tokens rediscovering something a prior session already figured out?"
+   If yes and nothing captured it, that is a gap -- capture it now. Prefer
+   SKILL creation when the discovery is a repeatable procedure (CLI/SDK usage);
+   prefer a MEMORY when it is a one-off fact. This is the PROACTIVE sibling of
+   #6 (workarounds): hunt for shortcuts even when the user did not frame the
+   work as a workaround. (Added 07-03 after the user asked whether autolearn's
+   agents are steered toward token-efficiency -- they were not; this is that
+   steering.)
 
 ### Moderate signals (act if seen more than once)
 
-7. **Tool choice patterns**: user consistently prefers one tool over another
-8. **Code style preferences**: naming, formatting, structure choices
-9. **Workflow patterns**: how the user approaches tasks, ordering preferences
-10. **Skill gaps**: moments where the agent struggled or didn't know something
+8. **Tool choice patterns**: user consistently prefers one tool over another
+9. **Code style preferences**: naming, formatting, structure choices
+10. **Workflow patterns**: how the user approaches tasks, ordering preferences
+11. **Skill gaps**: moments where the agent struggled or didn't know something
 
 ### Weak signals (record but don't create skills)
 
-11. **Contextual facts**: project-specific information worth remembering
-12. **Environment details**: tool versions, config quirks, platform specifics
+12. **Contextual facts**: project-specific information worth remembering
+13. **Environment details**: tool versions, config quirks, platform specifics
 
 ## What NOT to Capture
 
@@ -220,6 +239,17 @@ Preference order for skill actions:
 1. PATCH an existing skill that was loaded during the conversation
 2. ADD a section to an existing umbrella skill
 3. CREATE a new skill for a distinct pattern
+
+**Token-efficiency trigger (acts on signal #7):** when the conversation
+contained EXPENSIVE DISCOVERY (a `--help` chain 2+ levels deep,
+API/library-surface probing, re-reading docs/README/source, a multi-step
+diagnostic that converged on a fix) and that discovery is a REPEATABLE
+procedure (CLI/SDK usage), CREATE or PATCH a skill recording the direct
+invocation path + gotchas so the next session skips the discovery. This
+is the highest-leverage skill action -- it converts one-time token spend
+into permanent savings. Do NOT skill-ify a trivial single `--help` that
+immediately answered the question (threshold: >=2 probing steps AND the
+tool recurs across sessions).
 
 Do not create a new skill for every minor observation. Skills are for
 repeatable procedures, not one-off facts.
