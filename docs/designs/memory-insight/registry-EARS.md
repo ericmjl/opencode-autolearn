@@ -24,6 +24,7 @@
 - [ ] **MI-REG-012**: Migration shall be idempotent: re-running it shall not duplicate records if the registry already exists.
 - [ ] **MI-REG-013**: Legacy `memory.md` strength records whose text was already trimmed from the file (orphans) shall be skipped, and the migration shall report the skip count.
 - [ ] **MI-REG-014**: After a successful migration, the legacy `memory.md` shall be preserved on disk renamed to `memory.md.legacy` and shall no longer be loaded into agent context.
+- [ ] **MI-REG-019**: Migration shall materialize the `memories.jsonl` file even when zero records are migrated, so that an empty registry is represented by an empty (but present) JSONL file rather than an absent one.
 
 ## Backward Compatibility
 
