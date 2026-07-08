@@ -349,12 +349,17 @@ def migrate_from_legacy(persona_dir: Path) -> int:
             seen_ids.add(rec["id"])
             records.append(rec)
 
-    if records:
-        tmp = registry_path.with_suffix(registry_path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            for r in records:
-                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-        os.replace(tmp, registry_path)
+    # @spec MI-REG-019: always materialize the registry file, even when zero
+    # records were migrated. Without this, a fresh install (or a persona whose
+    # legacy files contain only headers) leaves no memories.jsonl but still
+    # writes the .registry_migrated marker — so migrate_from_legacy short-
+    # circuits on every subsequent call and the file is never created. An empty
+    # JSONL file is the valid representation of an empty registry.
+    tmp = registry_path.with_suffix(registry_path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        for r in records:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+    os.replace(tmp, registry_path)
 
     # @spec MI-REG-014: preserve legacy memory.md, stop loading it
     if memory_md.exists():

@@ -124,3 +124,26 @@ def test_update_and_remove(tmp_path):
     assert reg.get(rec["id"])["tier"] == "hot"
     assert reg.remove(rec["id"]) is True
     assert reg.get(rec["id"]) is None
+
+
+def test_migration_with_zero_records_materializes_registry(tmp_path):
+    # Regression: a fresh install seeds memory.md / user-profile.md with headers
+    # only (no entries). Migration must still create an empty memories.jsonl so
+    # the installer's verification step passes and subsequent load() calls don't
+    # rely on lazy creation being re-triggered (the .registry_migrated marker
+    # would short-circuit migrate_from_legacy on every later call).
+    p = persona(tmp_path)
+    (p / "memory.md").write_text(
+        "# Autolearn Memory\n\n<!-- Managed by autolearn. -->\n\n",
+        encoding="utf-8",
+    )
+    (p / "user-profile.md").write_text(
+        "# User Profile\n\n<!-- Managed by autolearn. -->\n\n",
+        encoding="utf-8",
+    )
+
+    reg = R.MemoryRegistry(p)
+    records = reg.load()  # triggers migration
+    assert records == []
+    assert reg.path.exists()  # memories.jsonl materialized even though empty
+    assert reg.load() == []   # readable, still empty
