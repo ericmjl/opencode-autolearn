@@ -19,6 +19,7 @@ Commands:
 #     "python-slugify",
 #     "cryptography",
 #     "keyring",
+#     "keyrings.alt",  # PlaintextKeyring file backend for headless hosts w/o OS keychain
 #     "requests",
 # ]
 # ///
