@@ -14,6 +14,9 @@ export interface BuildServerOpts {
   db?: Db;
   /** Enable Fastify request logging. */
   logger?: boolean;
+  /** Max request body size in bytes (default 64 MiB). Needed because a large
+   *  memories.jsonl registry can exceed Fastify's ~1 MiB default. */
+  bodyLimit?: number;
 }
 
 export async function buildServer(
@@ -22,7 +25,12 @@ export async function buildServer(
   const openedHere = !opts.db;
   const db = opts.db ?? openDb(opts.dataDir ?? "./data");
 
-  const app = Fastify({ logger: opts.logger ?? false });
+  const envLimitMb = Number.parseInt(process.env.AUTOLEARN_SYNC_BODY_LIMIT_MB ?? "", 10);
+  const bodyLimit =
+    opts.bodyLimit ??
+    (Number.isFinite(envLimitMb) && envLimitMb > 0 ? envLimitMb * 1024 * 1024 : 64 * 1024 * 1024);
+
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit });
 
   app.addHook("onRequest", buildAuthHook(db));
 
