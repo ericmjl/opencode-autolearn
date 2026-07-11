@@ -99,6 +99,10 @@ The reviewer classifies conversation signals into three tiers:
 4. Frustration about repetition: "again?", "I keep telling you"
 5. Explicit instruction to remember: "remember this", "write that down"
 6. Workarounds that worked: non-obvious techniques that resolved an issue
+6a. Failure diagnoses with root cause: dead-end paths stated with all three
+    of trigger condition + root cause + fix/workaround. The inverse of #6 —
+    captures WHY something didn't work. A bare "X is broken" stays excluded
+    (no condition/cause/fix → hardens into a refusal).
 
 ### Moderate Signals (act if seen more than once)
 
@@ -118,7 +122,9 @@ The reviewer classifies conversation signals into three tiers:
 - Clarification questions
 - Normal conversational flow
 - Environment-dependent failures
-- Negative claims about tools that could harden into refusals
+- **Bare** negative claims about tools that could harden into refusals (e.g., "X is broken").
+  **Conditionalized failure diagnoses** (condition + root cause + workaround) are NOT excluded --
+  they are captured as strong signal #6a (RA-CE-010a). (Refined 2026-07-11)
 
 ## Action Protocol
 
