@@ -2,6 +2,12 @@
 
 Self-improvement engine for [OpenCode](https://opencode.ai). Learns from your conversations, captures corrections and preferences, and escalates behavioral rules so your coding agent improves over time.
 
+<p align="center">
+  <a href="https://www.linkedin.com/feed/update/urn:li:activity:7481434645415477248/">
+    <img src="assets/junpeng-lao-quote.svg" alt="Junpeng Lao: Really like opencode-autolearn, it's the worklog/self-improvement loop done properly." width="720">
+  </a>
+</p>
+
 ## How it works
 
 1. **Conversation monitoring** — A plugin hooks into OpenCode events, counting turns and buffering messages (with secret redaction).
