@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 300" role="img" aria-label="Endorsement from Junpeng Lao: Really like opencode-autolearn, it's the worklog/self-improvement loop done properly.">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4f46e5"/>
+      <stop offset="55%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#9333ea"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#c4b5fd"/>
+      <stop offset="100%" stop-color="#f0abfc"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Card -->
+  <rect x="2" y="2" width="916" height="296" rx="20" fill="url(#bg)"/>
+  <rect x="2" y="2" width="916" height="296" rx="20" fill="url(#sheen)"/>
+  <rect x="2.75" y="2.75" width="914.5" height="294.5" rx="19.25" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+
+  <!-- Decorative quote-mark watermark -->
+  <text x="34" y="132" font-family="Georgia, 'Times New Roman', serif" font-size="170" fill="#ffffff" fill-opacity="0.12" font-weight="700">&#8220;</text>
+
+  <!-- Quote -->
+  <text font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="29" font-weight="600" fill="#ffffff">
+    <tspan x="92" y="104">Really like opencode-autolearn, it&#8217;s the</tspan>
+    <tspan x="92" y="144">worklog/self-improvement loop done properly.</tspan>
+  </text>
+
+  <!-- Divider -->
+  <rect x="92" y="174" width="52" height="3.5" rx="1.75" fill="url(#accent)"/>
+
+  <!-- Attribution -->
+  <text x="92" y="208" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#ffffff">Junpeng Lao</text>
+  <text font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#e9d5ff">
+    <tspan x="92" y="234">PyMC &amp; BlackJAX core dev &#183; Co-author,</tspan>
+    <tspan x="92" y="256">Bayesian Modeling and Computation in Python</tspan>
+  </text>
+</svg>
