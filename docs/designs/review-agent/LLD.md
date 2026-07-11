@@ -193,8 +193,10 @@ This creates an audit trail in observations.jsonl for detecting systematic captu
 - Never modify project source code (only write to `~/.autolearn/`)
 - Never write secrets, API keys, or credentials
 - Max 2 new skills per review
-- Keep memory.md under 3000 characters
-- Keep user-profile.md under 2000 characters
+- The memory + user registries are unbounded — entries leave only via
+  Ebbinghaus decay (cold past `eviction_grace_days`, default 90), not a
+  character cap. Prefer `memory strengthen` over `memory add` for semantic
+  duplicates to keep the registry clean and the reinforcement signal accurate.
 - If unsure about signal strength, lean toward not recording
 
 ## Review Output
@@ -218,7 +220,9 @@ Autolearn review complete: nothing to record.
 
 1. **Review of a review**: Buffer depth guard in plugin prevents this; reviewer never sees review content.
 2. **Conversation with no learning signals**: Valid outcome — output "nothing to record."
-3. **Memory full**: CLI trims oldest entries automatically.
+3. **Registry at scale**: the memory + user registries are unbounded; entries
+   leave only via Ebbinghaus decay (cold past `eviction_grace_days`), so there
+   is no "full" state. Run `retention score` periodically to refresh tiers.
 4. **Skill creation failure (duplicate)**: CLI exits with error; reviewer should handle gracefully.
 5. **Empty conversation**: Plugin won't spawn review if buffer is empty.
 
