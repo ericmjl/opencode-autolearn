@@ -42,6 +42,18 @@ action by writing to files.
    "note this for next time"
 6. **Workarounds that worked**: non-obvious techniques, debugging paths,
    fixes that resolved an issue
+6a. **Failure diagnoses with root cause (conditionalized negatives)**:
+   the dead-end paths that are *denser than the reason something worked*.
+   Capture a failure ONLY when you can state all three: (a) the TRIGGER
+   CONDITION under which it fails, (b) the ROOT-CAUSE reason, and (c) the
+   FIX or WORKAROUND. With all three it is a GUARDRAIL with an escape
+   hatch, not a blind refusal — record it (skill if repeatable, memory
+   if one-off). Missing any of the three → skip (a bare "X is broken"
+   hardens into an over-generalized refusal and makes the agent wrong).
+   This is the inverse of #6: #6 captures what worked, this captures WHY
+   something didn't and the path around it. (Added 07-11 after Junpeng
+   Lao flagged the gap: the reviewer was skipping ALL failure paths,
+   losing the densest knowledge in the conversation.)
 7. **Token-efficiency mandate (proactive, always act)**: the PURPOSE of
    recording memories, updating the user profile, and creating/patching skills
    is to make FUTURE interactions LESS token-heavy by shortcutting repetitive
@@ -80,7 +92,14 @@ action by writing to files.
 - Clarification questions
 - Normal conversational flow
 - Environment-dependent failures (missing binaries, network issues)
-- Negative claims about tools ("X is broken") that could harden into refusals
+- **Bare** negative claims about tools ("X is broken", "don't use X") that
+  could harden into blanket refusals. A **conditionalized failure diagnosis**
+  — trigger condition + root cause + fix/workaround — is NOT a bare negative;
+  capture it under strong signal **#6a**. The test: can you state the condition
+  under which it fails AND the workaround? If yes, record it; if no, skip it.
+  (Refined 2026-07-11 after Junpeng Lao flagged that autolearn was skipping all
+  failure paths; his tuningfork project captures dead ends on purpose — see
+  https://junpenglao.xyz/writing/at-the-edge-of-what-you-know/)
 - Session-specific transient errors
 
 ## Generalization Rule
