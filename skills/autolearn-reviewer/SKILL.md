@@ -153,12 +153,20 @@ uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py search query
 **First-time setup:** If the search returns an error about the index not existing,
 run `autolearn.py search init` first, then retry the query.
 
-### Step 4: Record observations (via memory + user profile + skills)
+### Step 4: Record observations (behavioral rules, memory, user profile, and skills)
 
-The old `improve.py observe` / `~/.agent-improvement/rules.yaml` observation store
-was removed on 2026-06-16 (along with the self-improving-agent skill, which shipped
-`improve.py`). There is no separate observation store anymore. Capture all corrections
-and preferences directly through the durable mechanisms below:
+Capture each correction or recurring preference in the behavioral-rule store as well
+as in the durable mechanisms below. The `self-improving-agent` skill ships
+`improve.py` and tracks repeated rules across projects:
+
+```bash
+uv run $HOME/.agents/skills/self-improving-agent/scripts/improve.py observe "<rule>" \
+  --project "<project>" --domain "<domain>" --context "<what happened>"
+```
+
+At the end of a review, run `improve.py due`. For rules that are due, follow the
+`self-improving-agent` skill's escalation protocol; `improve.py escalate --apply`
+updates the appropriate `AGENTS.md` and records the rule as written.
 
 - **Step 5** (memory registry): durable cross-session lessons
 - **Step 6** (user registry, `type="user"`): communication/workflow preferences

@@ -170,7 +170,7 @@ Autolearn ships **two** Python CLIs that work together. The README sections abov
 | `autolearn.py` | `~/.agents/skills/autolearn-reviewer/scripts/autolearn.py` | `~/.autolearn/` | Memory, skills, curator, search |
 | `improve.py` | `~/.agents/skills/self-improving-agent/scripts/improve.py` | `~/.agent-improvement/rules.yaml` | Behavioral rule tracking and AGENTS.md escalation |
 
-The reviewer records corrections via `improve.py observe ...` (Step 3 of the reviewer skill), then `improve.py escalate --apply` promotes repeated rules into the appropriate `AGENTS.md` file. Common commands:
+The reviewer records corrections via `improve.py observe ...` (Step 4 of the reviewer skill), then `improve.py escalate --apply` promotes repeated rules into the appropriate `AGENTS.md` file. Common commands:
 
 ```bash
 uv run ~/.agents/skills/self-improving-agent/scripts/improve.py status          # show all rules + counts

@@ -4,7 +4,7 @@
 
 ## Observation Recording
 
-- [x] **RA-AE-001**: When the reviewer identifies a strong signal, the reviewer shall record it via the durable mechanisms (`autolearn.py memory add`, `user add`, or `skill create/patch`) with the rule phrased as an imperative. (The old `improve.py observe` store was removed 2026-06-16.)
+- [x] **RA-AE-001**: When the reviewer identifies a strong signal, the reviewer shall record it in the behavioral-rule store via `improve.py observe` and via the durable mechanisms (`autolearn.py memory add`, `user add`, or `skill create/patch`) with the rule phrased as an imperative.
 - [x] **RA-AE-002**: The reviewer shall assign a domain to each observation (e.g., python-tooling, git-practices, code-style) when identifiable.
 
 ## Memory Updates
