@@ -140,9 +140,10 @@ uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py search query
 
 ### Step 3: Record Observations
 
-The old `improve.py observe` / `~/.agent-improvement/` store was removed on 2026-06-16.
-Capture all corrections and preferences directly through the durable mechanisms below
-(Steps 4–6). Rules phrased as imperatives.
+Record corrections and recurring preferences in the behavioral-rule store with
+`improve.py observe`, then capture the corresponding durable memory, user-profile, or
+skill update in Steps 4–6. The `self-improving-agent` skill owns cross-project rule
+tracking and escalation to `AGENTS.md`; rules should be phrased as imperatives.
 
 ### Step 4: Update Memory
 
