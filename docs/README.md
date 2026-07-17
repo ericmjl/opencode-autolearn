@@ -25,6 +25,15 @@ Start with the [High-Level Design](./high-level-design.md) — it has a status c
 - `sync push` all-personas iteration (SYNC-PER-012/013) — currently pushes active persona only
 - Project-level `.autolearn-persona` file (SYNC-PER-014) — project-specific persona mapping
 - Salt auto-bootstrap — Phase 1 requires manual `scp ~/.autolearn/.encryption_salt` to new machines
+- Certified Procedures correlation-falsification (CP-FAL-005) — probabilistic, suggestion-only, deferred behind the deterministic path
+
+### In flight
+
+- [Certified Procedures LLD](./designs/certified-procedures/LLD.md) (+ [EARS](./designs/certified-procedures/certified-procedures-EARS.md)) — falsify skills against ground-truth tool outcomes (Loop 1) + golden-path shortcut extraction (Loop 2), on a shared `outcomes.py` spine. See HLD Decisions 10–12.
+
+> Note: Memory Insight (`docs/designs/memory-insight/`) is **shipped** (registry,
+> retention, composer, shift detector, inspector UI all live) — the HLD status
+> rows reflect this.
 
 ## Conventions
 
