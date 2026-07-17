@@ -9,11 +9,17 @@
 > backends, multi-persona, plugin auto-sync) is shipped. Deferred: `rotate-key`,
 > interactive conflict resolution, salt auto-bootstrap, project-level persona mapping.
 >
-> **In flight** — *Memory Insight* (`docs/designs/memory-insight/`): replaces the
-> static 3000-char `memory.md` with a durable registry + dynamically composed
-> context view, adds Ebbinghaus-governed retention (embedding-free), a cross-session
-> recurring-preference (SW/EMA) shift detector, and a CLI-launchable inspector UI.
-> All components `planned`. See Decisions 8–9 and the Memory Insight LLD.
+> **Memory Insight** (`docs/designs/memory-insight/`) is **shipped**: the registry
+> (`memories.jsonl`), Ebbinghaus retention, the dynamic context composer, the
+> recurring-preference shift detector, and the inspector UI are all live and wired
+> into `autolearn.py` (see Decisions 8–9 and the Memory Insight LLD).
+>
+> **In flight** — *Certified Procedures* (`docs/designs/certified-procedures/`):
+> the Schema-harness-inspired ability to falsify autolearn's own skills against
+> ground-truth tool outcomes, and to shortcut roundabout workflows to a golden
+> path. Two co-equal loops (falsify + efficiency) on a shared `outcomes.py` spine
+> that indexes `opencode.db`'s tool-call + step-cost data the existing FTS5 index
+> excludes. See Decisions 10–12 and the Certified Procedures LLD.
 
 ## Problem Statement
 
@@ -160,7 +166,7 @@ Machine A                              Machine B
 - Generic S3/object store: No conflict detection, no per-file metadata, no auth built in.
 - Git-based sync: Merge conflicts on markdown bullet lists, requires git knowledge, no realtime.
 
-### Decision 8: Store/view separation — registry + dynamic context composition — _planned_
+### Decision 8: Store/view separation — registry + dynamic context composition — _shipped_
 
 **Choice**: Replace the single static, 3000-char-capped `memory.md` with two
 layers — a durable, unbounded `memories.jsonl` registry, and a per-session
@@ -183,7 +189,7 @@ gets the most useful (relevant + retained) tokens each session.
 - Embeddings for relevance: deferred — lexical Jaccard over topic tokens covers
   the recurring-preference case at zero dependency cost (see Decision 9).
 
-### Decision 9: Ebbinghaus-governed forgetting, embedding-free — _planned_
+### Decision 9: Ebbinghaus-governed forgetting, embedding-free — _shipped_
 
 **Choice**: Each memory carries a decaying retention score
 (`salience · e^(−λ·Δt) + σ·Σ(1/days_since_reinforcement)`); a record is evicted
@@ -204,6 +210,72 @@ relevance step alone.
   the recurring-preference detection that motivated the feature.
 - Hand-rolled FIFO retention (status quo): causes the staleness and orphans this
   decision set out to fix.
+
+### Decision 10: Falsify skills, not memories; against tool outcomes, not text — _in flight_
+
+**Choice**: Certified Procedures targets **skills** (autolearn's program-analog)
+and falsifies them against **ground-truth-bearing tool outcomes** indexed from
+`opencode.db`'s `part` table (`tool` / `step-finish` rows), which the existing
+FTS5 search index deliberately excludes (session-search DD4). It does **not**
+backtest prose memories against prose snippets.
+
+**Rationale**: The earlier "Certified Memory" concept was rejected on review.
+Schema's backtest is valuable because it is *verifiable* (run the program →
+compare to ground truth). A repo is not a closed deterministic system, so exact
+replay is impossible — but `opencode.db` *does* carry structured
+ground-truth-bearing evidence (106k+ tool parts incl. 2,485 errors; ~98k
+step-finish token ledgers; 1,394 skill-load parts). Prose-vs-prose backtesting
+retains none of Schema's verifiability and is polarity-blind and
+drift-confounding; backtesting skills against tool outcomes does. The critical
+epistemic rule: an outcome only falsifies where it carries a ground-truth bit
+(test result > exit code > user correction > raw output).
+
+**Alternatives considered**:
+- Backtest prose memories against FTS5 conversation text: rejected — the index
+  excludes tool outcomes by design, and lexical contradiction is unreliable.
+- A perfect repo simulator (true Schema `step()`): rejected — a repo is open and
+  non-deterministic; planning-inside-the-model is out of scope.
+
+### Decision 11: Two co-equal loops (falsify + efficiency) on one outcome spine — _in flight_
+
+**Choice**: Build the outcome index once (`outcomes.py`) and serve two loops:
+**Loop 1 (falsify)** verifies skills deterministically and auto-demotes
+failures; **Loop 2 (efficiency)** detects expensive roundabout tool sequences,
+extracts the golden path, and promotes it — gated by Loop 1 verification.
+
+**Rationale**: Falsification delivers *correctness* (procedures stay valid);
+the golden-path loop delivers *efficiency* (don't rediscover the direct
+invocation). They share the same substrate (the outcome index + step-cost
+ledger) and compose: Loop 2 proposes a shortcut, Loop 1 verifies it before
+promotion, so lucky one-off commands don't harden into bad shortcuts. Treating
+them co-equal matches the goal of "an opencode that gets more efficient over
+time," not just "tidier memory." Side benefit: indexing skill-load parts
+auto-repairs the dead `.usage.json` reuse ledger (`use_count` is currently never
+incremented).
+
+**Alternatives considered**:
+- Falsify-only, defer efficiency: cleaner sequencing but defers the
+  token-savings payoff that motivated the feature.
+- Efficiency-primary, falsify-secondary: inverts the safety layer; rejected
+  because ungated shortcut promotion is the failure mode Loop 1 prevents.
+
+### Decision 12: Deterministic falsification first; probabilistic is suggestion-only — _in flight_
+
+**Choice**: Loop 1 evaluates `test-suite` and `declared` claims
+deterministically and may auto-demote failures; correlation-based
+(skill-load → subsequent outcomes) falsification is deferred and, when added,
+is **suggestion-only — never auto-demote**.
+
+**Rationale**: Deterministic checks carry ground truth, so acting on them
+(auto-demote + flag) is safe. Probabilistic signals are drift-confounding and
+false-positive-prone; routing them around the Ebbinghaus grace period would, on
+present evidence, be net-negative. This honors the review finding that an
+automated "hygiene" loop on a noisy signal makes the system worse than no-op.
+
+**Alternatives considered**:
+- Probabilistic-first (covers all skills immediately): rejected — weaker signal
+  the review flagged; deterministic-first is the genuine Schema-grade path.
+- Auto-demote on correlation: rejected — unsafe on a noisy, drift-blind signal.
 
 ## Data Store Layout
 
@@ -257,11 +329,14 @@ Existing flat-layout installs are migrated to `personas/default/` automatically 
 | E2E-Encrypted Sync | shipped | Client-side AES-256-GCM, zero-knowledge server. Crypto, CLI (sync login/push/pull/status/export-key), plugin auto-sync. rotate-key + interactive pull deferred. | `autolearn.py` (sync), `sync-server/`, `sync-convex/`, `plugin/autolearn.js` |
 | Multi-Persona | shipped | Isolated knowledge stores per context (work/personal/OSS). Flat-to-personas migration is automatic and backward-compatible. | autolearn.py (persona) |
 | Backend-Agnostic Sync | shipped | Fastify+SQLite (bun:sqlite) and Convex HTTP Actions both implement the same REST API. CLI is backend-agnostic. | `sync-server/`, `sync-convex/` |
-| Memory Registry | planned | Durable unbounded `memories.jsonl` replacing the 3000-char `memory.md`; absorbs `strengths.json`; lazy legacy migration. | `registry.py`, `autolearn.py` |
-| Ebbinghaus Retention | planned | Decay + strengthen-on-access scoring; tiering (hot/warm/cold/evictable); grace-period eviction. Embedding-free. | `retention.py`, `autolearn.py` |
-| Context Composer | planned | Relevance × retention ranking into a soft char budget; emits `memory.context.md`; plugin regenerates on session start + after review. | `composer.py`, `plugin/autolearn.js` |
-| Recurring-Preference Detector | planned | Cross-session SW/EMA shift detector over lexical topic signatures; rising→candidate, falling→"learned". Embedding-free. | `shift.py`, `autolearn.py` |
-| Inspector UI | planned | CLI-launchable local web app to explore registry, retention curves, candidates, skills, activity. Stdlib-only server. | `inspector_server.py`, `autolearn.py` |
+| Memory Registry | shipped | Durable unbounded `memories.jsonl` replacing the 3000-char `memory.md`; absorbs `strengths.json`; lazy legacy migration. | `registry.py`, `autolearn.py` |
+| Ebbinghaus Retention | shipped | Decay + strengthen-on-access scoring; tiering (hot/warm/cold/evictable); grace-period eviction. Embedding-free. | `retention.py`, `autolearn.py` |
+| Context Composer | shipped | Relevance × retention ranking into a soft char budget; emits `memory.context.md`; plugin regenerates on session start + after review. | `composer.py`, `plugin/autolearn.js` |
+| Recurring-Preference Detector | shipped | Cross-session SW/EMA shift detector over lexical topic signatures; rising→candidate, falling→"learned". Embedding-free. | `shift.py`, `autolearn.py` |
+| Inspector UI | shipped | CLI-launchable local web app to explore registry, retention curves, candidates, skills, activity. Stdlib-only server. | `inspector_server.py`, `autolearn.py` |
+| Outcome Index | in flight | Indexes `opencode.db` tool-call + step-cost + skill-load parts the FTS5 index excludes; ground-truth-weighted; repairs `.usage.json` use_count. | `outcomes.py`, `autolearn.py` |
+| Procedure Falsification | in flight | Deterministic verification of skills (test-suite / declared claims); auto-demote + flag failures; probabilistic deferred as suggestion-only. | `falsify.py`, `autolearn.py` |
+| Golden-Path Shortcuts | in flight | Detects expensive roundabout tool sequences, extracts the direct invocation, promotes it gated by falsification. | `shortcuts.py`, `autolearn.py` |
 
 ## Risks and Mitigations
 
