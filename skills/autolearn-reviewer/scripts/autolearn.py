@@ -53,6 +53,12 @@ import composer
 import shift
 import inspector_server
 
+# Certified Procedures subsystem (outcome index + falsify + shortcuts).
+# See docs/designs/certified-procedures/LLD.md.
+import outcomes
+import falsify
+import shortcuts
+
 # @spec KS-MEM-020
 DATA_HOME = Path(os.environ.get("AUTOLEARN_HOME", Path.home() / ".autolearn"))
 
@@ -80,6 +86,7 @@ MAX_USER_CHARS = 2000
 
 OPENCODE_DB = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
 SEARCH_DB = ACTIVE_PERSONA_DIR / "search.db"
+OUTCOMES_DB = ACTIVE_PERSONA_DIR / "outcomes.db"  # Certified Procedures spine (persona-local)
 
 # Sync config and salt are shared across personas (not persona-specific).
 SYNC_CONFIG_FILE = DATA_HOME / "sync.yaml"
@@ -92,7 +99,7 @@ def set_persona(name: str) -> None:
     global ACTIVE_PERSONA, ACTIVE_PERSONA_DIR
     global MEMORY_FILE, USER_FILE, CONFIG_FILE, SKILLS_DIR, ARCHIVE_DIR
     global USAGE_FILE, CURATOR_STATE_FILE, OBSERVATIONS_FILE
-    global SEARCH_DB
+    global SEARCH_DB, OUTCOMES_DB
     ACTIVE_PERSONA = name
     ACTIVE_PERSONA_DIR = PERSONAS_DIR / name
     MEMORY_FILE = ACTIVE_PERSONA_DIR / "memory.md"
@@ -104,6 +111,7 @@ def set_persona(name: str) -> None:
     CURATOR_STATE_FILE = ACTIVE_PERSONA_DIR / ".curator_state.json"
     OBSERVATIONS_FILE = ACTIVE_PERSONA_DIR / "observations.jsonl"
     SEARCH_DB = ACTIVE_PERSONA_DIR / "search.db"
+    OUTCOMES_DB = ACTIVE_PERSONA_DIR / "outcomes.db"
 
 
 # @spec KS-MEM-001
@@ -238,6 +246,28 @@ def load_usage() -> dict:
 def save_usage(data: dict):
     ensure_dirs()
     USAGE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
+# @spec CP-OUT-005, CP-INT-001
+def repair_skill_use_counts() -> dict:
+    """Write skill load counts (derived from the outcome index) into .usage.json.
+
+    The ``use_count`` field is plumbed but never incremented today (skill-mgmt
+    LLD:91). The outcome index derives it from ``tool='skill'`` part counts,
+    which is authoritative for "times loaded in a recorded session".
+    """
+    usage = load_usage()
+    idx = outcomes.OutcomeIndex(OUTCOMES_DB, OPENCODE_DB)
+    counts = idx.skill_use_counts()
+    idx.close()
+    updated = 0
+    for name, meta in usage.items():
+        if name in counts and meta.get("use_count") != counts[name]:
+            meta["use_count"] = counts[name]
+            updated += 1
+    if updated:
+        save_usage(usage)
+    return {"updated": updated, "skills_with_loads": len(counts)}
 
 
 def load_config() -> dict:
@@ -760,19 +790,46 @@ def cmd_curator_run(args):
         if count >= escalation_threshold:
             escalation_candidates.append((rec.get("text", rec.get("id", "")), count))
 
+    # @spec CP-INT-001 — Certified Procedures orchestration (best-effort).
+    cp = {"indexed": None, "falsify": None, "usage_repaired": None}
+    try:
+        idx = outcomes.OutcomeIndex(OUTCOMES_DB, OPENCODE_DB)
+        cp["indexed"] = idx.index()
+        idx.close()
+    except Exception as exc:  # never let CP break the curator
+        cp["indexed"] = {"error": str(exc)}
+    try:
+        summary = falsify.verify_all(SKILLS_DIR, ACTIVE_PERSONA_DIR / falsify.VERDICTS_FILE)
+        usage = load_usage()
+        cons = falsify.apply_consequences(usage, summary["ledger"])
+        save_usage(usage)
+        cp["falsify"] = {k: summary[k] for k in ("pass", "fail", "inconclusive")}
+        cp["falsify"]["demoted"] = len(cons["demoted"])
+    except Exception as exc:
+        cp["falsify"] = {"error": str(exc)}
+    try:
+        cp["usage_repaired"] = repair_skill_use_counts()
+    except Exception as exc:
+        cp["usage_repaired"] = {"error": str(exc)}
+
     run_record = {
         "date": today.isoformat(),
         "transitions": transitions,
         "escalation_candidates": [
             {"entry": e, "strength": s} for e, s in escalation_candidates
         ],
+        "certified_procedures": cp,
     }
     state["last_run"] = today.isoformat()
     state["runs"].append(run_record)
     save_curator_state(state)
 
     total_transitions = sum(len(v) for v in transitions.values())
-    if total_transitions == 0 and not escalation_candidates:
+    cp_fail = cp.get("falsify", {})
+    cp_indexed = cp.get("indexed", {})
+    has_cp_signal = (isinstance(cp_fail, dict) and cp_fail.get("demoted")) or \
+                    (isinstance(cp_indexed, dict) and cp_indexed.get("gt_ge2"))
+    if total_transitions == 0 and not escalation_candidates and not has_cp_signal:
         print("Curator run complete: no transitions needed, no escalation candidates.")
     else:
         print("Curator run complete:")
@@ -784,6 +841,16 @@ def cmd_curator_run(args):
             for snippet, count in sorted(escalation_candidates, key=lambda x: -x[1]):
                 display = snippet[:80] + "..." if len(snippet) > 80 else snippet
                 print(f"    [{count}x] {display}")
+    # Certified Procedures summary (falsify demotions + reuse-ledger repair)
+    if isinstance(cp_fail, dict) and "pass" in cp_fail:
+        print(f"  procedures: {cp_fail.get('pass', 0)} pass, "
+              f"{cp_fail.get('fail', 0)} fail, {cp_fail.get('inconclusive', 0)} inconclusive"
+              + (f", {cp_fail['demoted']} demoted" if cp_fail.get('demoted') else ""))
+    if isinstance(cp_indexed, dict) and cp_indexed.get("gt_ge2") is not None:
+        print(f"  outcomes: indexed {cp_indexed.get('tool_parts', 0)} tool parts "
+              f"({cp_indexed.get('gt_ge2', 0)} ground-truth)")
+    if isinstance(cp.get("usage_repaired"), dict) and cp["usage_repaired"].get("updated"):
+        print(f"  reuse ledger: repaired {cp['usage_repaired']['updated']} skill use_counts")
 
 
 # @spec SM-LC-010
@@ -1847,6 +1914,26 @@ def main():
     topo_sub.add_parser("scan", help="Scan recent sessions for rising/falling topics")
     topo_sub.add_parser("candidates", help="List pending candidate preferences")
 
+    # --- Certified Procedures commands ---
+    oc = sub.add_parser("outcomes", help="Index opencode.db tool-call outcomes (Certified Procedures spine)", parents=[persona_parent])
+    oc_sub = oc.add_subparsers(dest="subcommand")
+    oc_init = oc_sub.add_parser("init", help="Build/update the outcome index from opencode.db")
+    oc_init.add_argument("--full", action="store_true", help="Full rebuild")
+    oc_sub.add_parser("status", help="Show outcome index size and coverage")
+
+    fal = sub.add_parser("falsify", help="Falsify skills against their claims (Loop 1)", parents=[persona_parent])
+    fal_sub = fal.add_subparsers(dest="subcommand")
+    fal_run = fal_sub.add_parser("run", help="Verify skills and apply consequences")
+    fal_run.add_argument("--id", default=None, help="Verify a single skill by name")
+    fal_run.add_argument("--dry-run", action="store_true", help="Report without mutating")
+    fal_sub.add_parser("verdicts", help="Print the per-skill verdict ledger")
+
+    sho = sub.add_parser("shortcuts", help="Detect roundabout workflows + golden paths (Loop 2)", parents=[persona_parent])
+    sho_sub = sho.add_subparsers(dest="subcommand")
+    sho_det = sho_sub.add_parser("detect", help="Scan recent sessions for roundabout paths")
+    sho_det.add_argument("--dry-run", action="store_true", help="Report without saving candidates")
+    sho_sub.add_parser("list", help="List staged golden-path candidates")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -1911,6 +1998,18 @@ def main():
         "topics": {
             "scan": cmd_topics_scan,
             "candidates": cmd_topics_candidates,
+        },
+        "outcomes": {
+            "init": outcomes.cmd_outcomes_init,
+            "status": outcomes.cmd_outcomes_status,
+        },
+        "falsify": {
+            "run": falsify.cmd_falsify_run,
+            "verdicts": falsify.cmd_falsify_verdicts,
+        },
+        "shortcuts": {
+            "detect": shortcuts.cmd_shortcuts_detect,
+            "list": shortcuts.cmd_shortcuts_list,
         },
     }
 

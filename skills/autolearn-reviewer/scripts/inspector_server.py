@@ -94,6 +94,29 @@ def load_skills(pdir: Path) -> dict:
         return {}
 
 
+def load_verdicts(pdir: Path) -> dict:
+    """Per-skill falsification verdicts (Certified Procedures, Loop 1)."""
+    path = pdir / "verdicts.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def load_shortcuts(pdir: Path) -> list:
+    """Staged golden-path candidates (Certified Procedures, Loop 2)."""
+    path = pdir / "shortcuts.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
 def load_activity(pdir: Path, n: int = 50) -> list[dict]:
     path = pdir / "observations.jsonl"
     if not path.exists():
@@ -138,12 +161,15 @@ def handle_request(method: str, path: str, body: bytes, persona_dir: Path):
                 tiers[t] += 1
         pending = load_candidates(persona_dir, "pending")
         learned = load_candidates(persona_dir, "learned")
+        verdicts = load_verdicts(persona_dir)
+        failing = sum(1 for v in verdicts.values() if v.get("verdict") == "fail")
         return json_response({
             "total": len([r for r in records if r.get("status") != "evicted"]),
             "tiers": tiers,
             "pending_candidates": len(pending),
             "learned": len(learned),
             "unscored": unscored,
+            "failing_procedures": failing,
         })
 
     if method == "GET" and route == "/api/memories":
@@ -181,6 +207,13 @@ def handle_request(method: str, path: str, body: bytes, persona_dir: Path):
 
     if method == "GET" and route == "/api/skills":
         return json_response(load_skills(persona_dir))
+
+    # @spec CP-INT-002 — Certified Procedures surfaces
+    if method == "GET" and route == "/api/procedures":
+        return json_response(load_verdicts(persona_dir))
+
+    if method == "GET" and route == "/api/shortcuts":
+        return json_response(load_shortcuts(persona_dir))
 
     if method == "GET" and route == "/api/activity":
         return json_response(load_activity(persona_dir))

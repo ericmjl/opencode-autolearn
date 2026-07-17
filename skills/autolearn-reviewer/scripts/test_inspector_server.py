@@ -68,3 +68,38 @@ def test_candidate_dismiss(tmp_path):
     assert status == 200 and body["ok"] is True
     rows = [json.loads(l) for l in (p / "candidates.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     assert rows[0]["status"] == "dismissed"
+
+
+def test_procedures_endpoint(tmp_path):
+    p = persona(tmp_path)
+    verdicts = {"my-skill": {"skill": "my-skill", "verdict": "fail", "method": "declared",
+                             "fail_count": 2, "evidence": "boom", "checked_at": "2026-07-16 10:00"}}
+    (p / "verdicts.json").write_text(json.dumps(verdicts), encoding="utf-8")
+    status, body = decode(call("GET", "/api/procedures", p))
+    assert status == 200 and body["my-skill"]["verdict"] == "fail"
+
+
+def test_shortcuts_endpoint(tmp_path):
+    p = persona(tmp_path)
+    cands = [{"kind": "help-chain", "golden_command": "foo run", "cost_tokens": 5000}]
+    (p / "shortcuts.json").write_text(json.dumps(cands), encoding="utf-8")
+    status, body = decode(call("GET", "/api/shortcuts", p))
+    assert status == 200 and len(body) == 1 and body[0]["golden_command"] == "foo run"
+
+
+def test_overview_failing_procedures_count(tmp_path):
+    p = persona(tmp_path)
+    verdicts = {
+        "a": {"verdict": "fail"}, "b": {"verdict": "pass"}, "c": {"verdict": "fail"},
+    }
+    (p / "verdicts.json").write_text(json.dumps(verdicts), encoding="utf-8")
+    status, body = decode(call("GET", "/api/overview", p))
+    assert status == 200 and body["failing_procedures"] == 2
+
+
+def test_procedures_endpoint_safe_when_absent(tmp_path):
+    p = persona(tmp_path)
+    status, body = decode(call("GET", "/api/procedures", p))
+    assert status == 200 and body == {}
+    status, body = decode(call("GET", "/api/shortcuts", p))
+    assert status == 200 and body == []
