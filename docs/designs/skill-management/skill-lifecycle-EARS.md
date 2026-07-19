@@ -29,6 +29,16 @@
 - [x] **SM-LC-011**: If no transitions are needed, the system shall print "Curator run complete: no transitions needed."
 - [x] **SM-LC-012**: If transitions occur, the system shall print each transition type with the affected skill names.
 
+## Usage Tracking Repair
+
+The `repair_skill_use_counts()` side-effect of `curator run` keeps `.usage.json`'s `use_count` and `last_activity_at` fields in sync with the authoritative outcome index (CP-OUT-005). These requirements govern the extension that brings previously-untracked, user-installed skills under telemetry coverage without subjecting them to lifecycle management.
+
+- [ ] **SM-LC-013**: When `curator run` invokes `repair_skill_use_counts()`, the system SHALL scan all configured skill-discovery directories for `SKILL.md` files whose skill name is not present in `.usage.json`.
+- [ ] **SM-LC-014**: For each on-disk skill not in `.usage.json` that has been loaded at least once (count > 0 in the outcome index), the system SHALL add a tracking entry with `created_by: "tracked-manual"`, `state: "active"`, `created_at` derived from the `SKILL.md` file mtime, `use_count` copied from the index, and `last_activity_at` derived from the most recent `tool='skill'` part timestamp.
+- [ ] **SM-LC-015**: The disk scan SHALL skip any directory whose name starts with `.archive` (matches `.archive/`, `.archive-manual/`, etc.), so previously-archived manual skills are not resurrected into `.usage.json`.
+- [ ] **SM-LC-016**: When updating an existing `.usage.json` entry, the system SHALL NOT modify the `created_by` field. Only `use_count` and `last_activity_at` are refreshed.
+- [ ] **SM-LC-017**: The retention/lifecycle transition loop SHALL continue to skip any entry whose `created_by` is not `"autolearn"`, including the new `"tracked-manual"` entries introduced by SM-LC-014. `tracked-manual` skills are observe-only: tracked for usage, never auto-archived.
+
 ## Related Documents
 
 - [Skill Management LLD](./LLD.md)

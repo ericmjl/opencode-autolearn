@@ -248,26 +248,143 @@ def save_usage(data: dict):
     USAGE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
-# @spec CP-OUT-005, CP-INT-001
+# @spec CP-OUT-005, CP-INT-001, SM-LC-013, SM-LC-014, SM-LC-015, SM-LC-016
 def repair_skill_use_counts() -> dict:
-    """Write skill load counts (derived from the outcome index) into .usage.json.
+    """Write skill load signals (derived from the outcome index) into .usage.json.
 
-    The ``use_count`` field is plumbed but never incremented today (skill-mgmt
-    LLD:91). The outcome index derives it from ``tool='skill'`` part counts,
-    which is authoritative for "times loaded in a recorded session".
+    Two phases:
+
+    1. **Update existing entries.** For every skill already in ``.usage.json``,
+       copy the latest ``use_count`` from the outcome index and refresh
+       ``last_activity_at`` if the index observes a more recent load than the
+       recorded date. ``created_by`` is never modified (SM-LC-016).
+
+    2. **Add ``tracked-manual`` entries for previously-untracked skills.**
+       Scan configured skill-discovery dirs for ``SKILL.md`` files. For any
+       on-disk skill that is (a) not already in ``.usage.json``, (b) not in an
+       ``.archive*`` directory (SM-LC-015), and (c) has been loaded at least
+       once (count > 0 in the outcome index), add a tracking entry with
+       ``created_by: "tracked-manual"`` (SM-LC-014).
+
+    Returns a summary dict ``{"updated": N, "added": M, "skills_with_loads": K}``.
     """
     usage = load_usage()
     idx = outcomes.OutcomeIndex(OUTCOMES_DB, OPENCODE_DB)
-    counts = idx.skill_use_counts()
+    signals = idx.skill_use_signals()
     idx.close()
+
+    # Phase 1 — refresh use_count + last_activity_at on existing entries.
     updated = 0
     for name, meta in usage.items():
-        if name in counts and meta.get("use_count") != counts[name]:
-            meta["use_count"] = counts[name]
+        sig = signals.get(name)
+        if sig is None:
+            continue
+        dirty = False
+        new_count = sig["count"]
+        if meta.get("use_count") != new_count:
+            meta["use_count"] = new_count
+            dirty = True
+        # Refresh last_activity_at if the index sees a more recent load.
+        last_ms = sig["last_seen_ms"]
+        if last_ms:
+            last_iso = datetime.fromtimestamp(last_ms / 1000).strftime("%Y-%m-%d")
+            if meta.get("last_activity_at", "") < last_iso:
+                meta["last_activity_at"] = last_iso
+                dirty = True
+        if dirty:
             updated += 1
-    if updated:
+
+    # Phase 2 — add tracked-manual entries for on-disk skills (SM-LC-013/014/015).
+    added = 0
+    on_disk = _scan_skill_dirs_for_repair()
+    for name, created_at_iso in on_disk.items():
+        if name in usage:
+            continue  # SM-LC-016: never touch existing entries
+        sig = signals.get(name)
+        if sig is None or sig["count"] == 0:
+            continue  # never loaded, no signal worth tracking
+        last_ms = sig["last_seen_ms"]
+        last_iso = (
+            datetime.fromtimestamp(last_ms / 1000).strftime("%Y-%m-%d")
+            if last_ms else created_at_iso
+        )
+        usage[name] = {
+            "created_by": "tracked-manual",
+            "created_at": created_at_iso,
+            "use_count": sig["count"],
+            "patch_count": 0,
+            "last_activity_at": last_iso,
+            "state": "active",
+            "pinned": False,
+        }
+        added += 1
+
+    if updated or added:
         save_usage(usage)
-    return {"updated": updated, "skills_with_loads": len(counts)}
+    return {
+        "updated": updated,
+        "added": added,
+        "skills_with_loads": len(signals),
+    }
+
+
+# Skill discovery roots — mirrors opencode's own skill-discovery scan so that
+# `repair_skill_use_counts()` phase 2 sees the same skills the agent sees.
+# Override via the ``AUTOLEARN_SKILL_DISCOVERY`` env var (``:``-separated) for
+# test isolation.
+# @spec SM-LC-013
+def _skill_discovery_dirs() -> list:
+    env = os.environ.get("AUTOLEARN_SKILL_DISCOVERY")
+    if env:
+        return [Path(p) for p in env.split(os.pathsep) if p]
+    return [
+        Path.home() / ".agents" / "skills",
+        Path.home() / ".config" / "opencode" / "skills",
+    ]
+
+
+# @spec SM-LC-013, SM-LC-015
+def _scan_skill_dirs_for_repair() -> dict:
+    """Return ``{skill_name: created_at_iso}`` for skills on disk, excluding archives.
+
+    Iterates every configured skill-discovery directory. For each subdirectory
+    containing a ``SKILL.md``:
+
+    - skips any directory whose name starts with ``.archive`` (SM-LC-015) —
+      this covers ``.archive/`` (autolearn-managed) and ``.archive-manual/``
+      (ad-hoc user archival) alike, so neither is resurrected into
+      ``.usage.json``;
+    - records ``created_at`` as the ``SKILL.md`` file mtime (best available
+      proxy for "when this skill was installed");
+    - first-seen-wins precedence across discovery dirs (a skill shadowed by an
+      earlier dir is not overwritten).
+    """
+    found: dict[str, str] = {}
+    for d in _skill_discovery_dirs():
+        if not d.is_dir():
+            continue
+        try:
+            entries = sorted(d.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+            # SM-LC-015: skip any archive variant.
+            if entry.name.startswith(".archive"):
+                continue
+            skill_md = entry / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            if entry.name in found:
+                continue  # first-seen-wins
+            try:
+                mtime = skill_md.stat().st_mtime
+                mtime_iso = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+            except OSError:
+                mtime_iso = date.today().isoformat()
+            found[entry.name] = mtime_iso
+    return found
 
 
 def load_config() -> dict:
