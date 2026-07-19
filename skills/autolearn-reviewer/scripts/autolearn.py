@@ -2045,7 +2045,8 @@ def main():
     fal = sub.add_parser("falsify", help="Falsify skills against their claims (Loop 1)", parents=[persona_parent])
     fal_sub = fal.add_subparsers(dest="subcommand")
     fal_run = fal_sub.add_parser("run", help="Verify skills and apply consequences")
-    fal_run.add_argument("--id", default=None, help="Verify a single skill by name")
+    fal_run.add_argument("--id", default=None, help="Verify a single skill by name (searches persona + ~/.agents/skills)")
+    fal_run.add_argument("--all", action="store_true", help="Also scan ~/.agents/skills/ (installed skills with claims)")
     fal_run.add_argument("--dry-run", action="store_true", help="Report without mutating")
     fal_sub.add_parser("verdicts", help="Print the per-skill verdict ledger")
 

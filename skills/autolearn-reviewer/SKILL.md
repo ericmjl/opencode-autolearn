@@ -7,6 +7,9 @@ description: |
   review cycles. Do NOT load this skill during normal conversation;
   it is for the autolearn-reviewer agent only.
 license: MIT
+verify:
+  command: "uv run --with pytest --with python-slugify pytest scripts/ --ignore=scripts/test_sync_e2e.py --ignore=scripts/test_sync_crypto.py"
+  expect_exit: 0
 ---
 
 # Autolearn Reviewer
