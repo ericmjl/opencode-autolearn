@@ -79,10 +79,13 @@ def _make_skill_on_disk(base: Path, name: str, contents: str = "# skill\n") -> P
 def isolated_env(tmp_path, monkeypatch):
     """Isolate persona dir, opencode.db path, and skill discovery dirs.
 
-    Returns a namespace with the relevant paths so individual tests can build
-    up the exact on-disk state they need.
+    Patches ALL the module-level paths in autolearn.py that the repair code
+    touches, including DATA_HOME / PERSONAS_DIR / REGISTRY_FILE, so the test
+    can never pollute the real ~/.autolearn/ even on a fresh CI runner where
+    ensure_dirs() would otherwise mkdir the real directory.
     """
-    persona = tmp_path / "persona"
+    home = tmp_path / "autolearn_home"
+    persona = home / "personas" / "default"
     skills_dir = persona / "skills"
     skills_dir.mkdir(parents=True)
 
@@ -93,12 +96,21 @@ def isolated_env(tmp_path, monkeypatch):
 
     opencode_db = tmp_path / "opencode.db"
 
-    # Override module-level paths in autolearn.py.
+    # Patch every related module-level path. set_persona() does this in
+    # production; we replicate the relevant subset here.
+    monkeypatch.setattr(autolearn, "DATA_HOME", home)
+    monkeypatch.setattr(autolearn, "PERSONAS_DIR", home / "personas")
+    monkeypatch.setattr(autolearn, "REGISTRY_FILE", home / ".persona_registry.json")
     monkeypatch.setattr(autolearn, "ACTIVE_PERSONA_DIR", persona)
     monkeypatch.setattr(autolearn, "SKILLS_DIR", skills_dir)
+    monkeypatch.setattr(autolearn, "ARCHIVE_DIR", skills_dir / ".archive")
     monkeypatch.setattr(autolearn, "USAGE_FILE", skills_dir / ".usage.json")
+    monkeypatch.setattr(autolearn, "CURATOR_STATE_FILE", persona / ".curator_state.json")
     monkeypatch.setattr(autolearn, "OUTCOMES_DB", persona / "outcomes.db")
     monkeypatch.setattr(autolearn, "OPENCODE_DB", opencode_db)
+    # Pre-create the registry file so init_registry() is a no-op even if a
+    # future code path calls ensure_dirs() before repair.
+    (home / ".persona_registry.json").write_text('{"default": "default"}')
 
     # Discovery dirs via env var so _skill_discovery_dirs() picks them up.
     monkeypatch.setenv(
@@ -107,6 +119,7 @@ def isolated_env(tmp_path, monkeypatch):
     )
 
     return type("NS", (), {
+        "home": home,
         "persona": persona,
         "skills_dir": skills_dir,
         "usage_file": skills_dir / ".usage.json",
@@ -344,3 +357,103 @@ def test_scan_first_seen_wins_across_dirs(isolated_env):
     found = autolearn._scan_skill_dirs_for_repair()
     assert len(found) == 1
     assert "dup" in found
+
+
+# Real ~/.agents/skills/ is a mix of real directories and symlinks to
+# ~/.autolearn/personas/default/skills/. Path.is_dir() follows symlinks
+# (correct for the scan), and Phase 2's `if name in usage: continue` correctly
+# skips autolearn-created skills symlinked into the discovery dir. This test
+# pins that behavior so a future refactor can't silently break it.
+def test_scan_handles_symlinked_skill_dirs(isolated_env, tmp_path):
+    ns = isolated_env
+    # A real skill lives outside the discovery dir; a symlink points to it.
+    real_skill_dir = tmp_path / "outside_skill_dir"
+    real_skill_dir.mkdir()
+    (real_skill_dir / "SKILL.md").write_text("# symlinked\n")
+
+    symlink_path = ns.agents_skills / "symlinked-skill"
+    symlink_path.symlink_to(real_skill_dir, target_is_directory=True)
+
+    found = autolearn._scan_skill_dirs_for_repair()
+    assert "symlinked-skill" in found
+
+
+# ---------------------------------------------------------------------------
+# SM-LC-017 — tracked-manual entries survive curator run (observe-only)
+# ---------------------------------------------------------------------------
+
+# @spec SM-LC-017
+def test_tracked_manual_entry_not_transitioned_by_curator_run(isolated_env, monkeypatch):
+    """A tracked-manual entry passes through curator run unchanged.
+
+    SM-LC-017 guarantees that the retention/lifecycle transition loop skips
+    any entry whose created_by is not 'autolearn'. This test crafts a
+    tracked-manual entry old enough to trip BOTH the stale (30d) and archive
+    (90d) thresholds, runs cmd_curator_run, and asserts the entry is neither
+    state-transitioned nor moved to .archive/.
+    """
+    ns = isolated_env
+    # Build a minimal config so load_config() returns the defaults we expect.
+    (ns.persona / "config.yaml").write_text(
+        "review_threshold: 10\nsession_review_on_idle: true\nmax_conversation_buffer: 50\n"
+        "curator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\n"
+        "escalation_threshold: 3\n"
+    )
+
+    # Ancient last_activity so both thresholds are tripped.
+    ancient = "2020-01-01"
+    ns.usage_file.write_text(json.dumps({
+        "old-manual": {
+            "created_by": "tracked-manual",
+            "created_at": ancient,
+            "use_count": 5,
+            "patch_count": 0,
+            "last_activity_at": ancient,
+            "state": "active",
+            "pinned": False,
+        }
+    }))
+
+    # Build a fake argparse Namespace so cmd_curator_run gets what it expects.
+    args = type("Args", (), {"persona": "default"})()
+
+    # Run the curator. We don't care about the summary output, only that the
+    # entry is preserved unchanged.
+    autolearn.cmd_curator_run(args)
+
+    usage = json.loads(ns.usage_file.read_text())
+    assert "old-manual" in usage, "tracked-manual skill was dropped"
+    entry = usage["old-manual"]
+    assert entry["state"] == "active", f"state was transitioned: {entry['state']}"
+    assert entry["created_by"] == "tracked-manual"
+    # And the skill dir was NOT moved to .archive/ (we never created one on
+    # disk; if the curator had tried to archive it, the rename would have
+    # failed loudly).
+    assert not (ns.skills_dir / ".archive" / "old-manual").exists()
+
+
+# @spec SM-LC-017 — regression test for the comparison operator.
+def test_curator_run_skips_legacy_user_entries_too(isolated_env):
+    """The pre-existing 'user' value also benefits from the same exemption."""
+    ns = isolated_env
+    (ns.persona / "config.yaml").write_text(
+        "stale_after_days: 30\narchive_after_days: 90\nescalation_threshold: 3\n"
+    )
+    ns.usage_file.write_text(json.dumps({
+        "legacy-skill": {
+            "created_by": "user",  # legacy value
+            "created_at": "2020-01-01",
+            "use_count": 0,
+            "patch_count": 0,
+            "last_activity_at": "2020-01-01",
+            "state": "active",
+            "pinned": False,
+        }
+    }))
+
+    args = type("Args", (), {"persona": "default"})()
+    autolearn.cmd_curator_run(args)
+
+    usage = json.loads(ns.usage_file.read_text())
+    assert usage["legacy-skill"]["state"] == "active"
+    assert usage["legacy-skill"]["created_by"] == "user"

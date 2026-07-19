@@ -848,7 +848,7 @@ def cmd_skill_usage(args):
 
 
 # @spec SM-LC-001, SM-LC-002, SM-LC-003, SM-LC-004
-# @spec SM-LC-005, SM-LC-006, SM-LC-007
+# @spec SM-LC-005, SM-LC-006, SM-LC-007, SM-LC-017
 # @spec SM-LC-008, SM-LC-009, SM-LC-011, SM-LC-012
 def cmd_curator_run(args):
     config = load_config()
@@ -966,8 +966,12 @@ def cmd_curator_run(args):
     if isinstance(cp_indexed, dict) and cp_indexed.get("gt_ge2") is not None:
         print(f"  outcomes: indexed {cp_indexed.get('tool_parts', 0)} tool parts "
               f"({cp_indexed.get('gt_ge2', 0)} ground-truth)")
-    if isinstance(cp.get("usage_repaired"), dict) and cp["usage_repaired"].get("updated"):
-        print(f"  reuse ledger: repaired {cp['usage_repaired']['updated']} skill use_counts")
+    if isinstance(cp.get("usage_repaired"), dict):
+        ur = cp["usage_repaired"]
+        if ur.get("updated"):
+            print(f"  usage tracking: repaired use_count on {ur['updated']} skill(s)")
+        if ur.get("added"):
+            print(f"  usage tracking: newly tracking {ur['added']} manual skill(s)")
 
 
 # @spec SM-LC-010

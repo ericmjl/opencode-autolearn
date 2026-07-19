@@ -194,7 +194,7 @@ Curator is idempotent — running it multiple times produces the same result.
 
 **Phase 1 — Update existing entries.** For every skill already in `.usage.json`, copy the latest `use_count` from the outcome index and refresh `last_activity_at` if the outcome index observes a more recent load than the recorded date. Never modifies `created_by` on existing entries (SM-LC-016).
 
-**Phase 2 — Add `tracked-manual` entries for previously-untracked skills.** Scan all configured skill-discovery directories (`~/.agents/skills/`, `~/.config/opencode/skills/`, configurable via `AGENTS_SKILLS_DIR`-style env vars in future) for `SKILL.md` files. For any skill on disk that:
+**Phase 2 — Add `tracked-manual` entries for previously-untracked skills.** Scan all configured skill-discovery directories (`~/.agents/skills/`, `~/.config/opencode/skills/`, configurable via the `AUTOLEARN_SKILL_DISCOVERY` env var) for `SKILL.md` files. For any skill on disk that:
 
 - is **not** already in `.usage.json`, AND
 - has been **loaded at least once** (count > 0 in the outcome index)
@@ -207,18 +207,90 @@ The disk scan **must skip** any directory whose name starts with `.archive` (e.g
 
 ### Why this is non-destructive
 
-`tracked-manual` entries are **observe-only**. The curator's retention loop checks `meta.get("created_by") != "autolearn"` (autolearn.py:753) and skips; the new `"tracked-manual"` value therefore falls through the same exemption the legacy `"user"` value already used. A `tracked-manual` skill is never auto-archived, never state-transitioned, and never deleted. The data exists purely so audits (manual or future tooling) can answer "is this skill actually being used?" with real signal rather than mtime heuristics.
+`tracked-manual` entries are **observe-only**. The curator's retention loop checks `meta.get("created_by") != "autolearn"` (autolearn.py:870) and skips; the new `"tracked-manual"` value therefore falls through the same exemption the legacy `"user"` value already used. A `tracked-manual` skill is never auto-archived, never state-transitioned, and never deleted. The data exists purely so audits (manual or future tooling) can answer "is this skill actually being used?" with real signal rather than mtime heuristics.
 
 ### Discovery
 
+The scan is performed by the `_skill_discovery_dirs()` helper, which returns a list of directories to walk. By default it returns:
+
 ```python
-SKILL_DISCOVERY_DIRS = [
+[
     Path.home() / ".agents" / "skills",
     Path.home() / ".config" / "opencode" / "skills",
 ]
 ```
 
-Mirrors the directories opencode scans for skill discovery. Project-local `.agents/skills/` directories are intentionally **not** scanned — they are repo-specific and would produce noise in the global `.usage.json`. (Future work: optional project-aware scan.)
+For test isolation, the `AUTOLEARN_SKILL_DISCOVERY` env var (os-path-separated list) overrides the defaults. Mirrors the directories opencode scans for skill discovery. Project-local `.agents/skills/` directories are intentionally **not** scanned — they are repo-specific and would produce noise in the global `.usage.json`. (Future work: optional project-aware scan.)
+
+> **Known asymmetry (not a bug):** `opencode.db` records every `tool='skill'` load regardless of where the skill lives on disk. Skills loaded only from project-local directories (e.g. `~/Documents/brain42/.agents/skills/conflict-detector`) appear in `signals` but cannot be matched by the disk scan, so they never become `tracked-manual` entries. They inflate the summary's `skills_with_loads` count without contributing to `added`. This is accepted because project-local skills are inherently repo-scoped, while `.usage.json` is global. A future project-aware scan could close the gap.
+
+## Design Rationale: Why Two Stores (`.usage.json` + `outcomes.db`)
+
+A reader will notice the system maintains **two** data stores that both carry skill-usage signal: `.usage.json` (a JSON file) and `outcomes.db` (a SQLite database, populated by the Certified Procedures subsystem). This section documents why both exist and the trade-off we knowingly accept.
+
+### Data flow
+
+```
+1. opencode itself records every tool call (including `skill`) into its own
+   SQLite ledger:
+       ~/.local/share/opencode/opencode.db  →  `part` table
+   This is opencode's core behavior. No autolearn plugin hooks the skill-load
+   lifecycle; the source of truth is opencode.db itself.
+
+2. autolearn's OutcomeIndex.index() pulls incrementally from opencode.db
+   using a high-water mark (runs as a side-effect of `curator run` and on
+   explicit `outcomes init`):
+       opencode.db.part  →  outcomes.db.tool_outcome
+   This is a polling read, not a push.
+
+3. repair_skill_use_counts() copies the derived signal back out:
+       outcomes.db  →  .usage.json
+   Specifically the `use_count` and `last_activity_at` fields. This is the
+   "repair" step that keeps the two stores in sync.
+```
+
+### What each store holds
+
+| Field | `.usage.json` | `outcomes.db` | Notes |
+|-------|---------------|---------------|-------|
+| `use_count` | ✅ derived (drifts) | ✅ authoritative | `COUNT(*) GROUP BY skill_name` on `tool='skill'` rows |
+| `last_activity_at` | ✅ derived (drifts) | ✅ authoritative | `MAX(time_created)` per skill |
+| `created_by` | ✅ | ❌ | Provenance: `autolearn`, `tracked-manual`, `user` |
+| `created_at` | ✅ | ❌ | Skill creation/installation date |
+| `patch_count` | ✅ | ❌ | Could be in outcomes.db if we recorded patch events |
+| `state` (active/stale/archived) | ✅ | ❌ | Curator lifecycle state |
+| `pinned` | ✅ | ❌ | User-set exemption flag |
+| `archived_at` | ✅ | ❌ | When the curator archived the skill |
+
+### Why we keep both (and accept the repair mechanism as a smell)
+
+The two fields `.usage.json` derives from `outcomes.db` (`use_count`, `last_activity_at`) **are a code smell** — having two sources of truth for the same data is what makes the `repair_*()` function necessary. The legitimate fields `.usage.json` holds that have no natural home in outcomes.db are lifecycle state (`state`, `pinned`, `archived_at`), provenance (`created_by`, `created_at`), and patch telemetry (`patch_count`).
+
+The known cleaner factoring would be one of:
+
+- **A. Consolidate entirely** — add a `skill_meta` table to `outcomes.db`, delete `.usage.json`. Pro: single store, no drift. Con: every `load_usage`/`save_usage` callsite (~15) needs rewriting; migration path for existing JSON files.
+- **B. Strip `.usage.json` to state-only** — remove `use_count`/`last_activity_at` from `.usage.json`; callers JOIN with outcomes.db for usage. Pro: smallest change that removes the drift surface. Con: ~5 callers need a JOIN.
+
+**We deliberately accept the smell for now** because:
+
+1. **`.usage.json` predates `outcomes.db`.** The skill-management subsystem shipped first; the Certified Procedures subsystem (with `outcomes.db`) was added later. The repair mechanism was the minimal-disruption way to wire usage signal into the existing file.
+2. **Neither store syncs across machines.** We confirmed `SYNC_FILES` (autolearn.py:1391) excludes both `.usage.json` and `outcomes.db` — both are machine-local. The "sync purposes" justification one might assume for `.usage.json` does not apply. The right eventual home for cross-machine usage telemetry is an open design question.
+3. **The blast radius of consolidation is uncalled for today.** The repair mechanism costs one function and one curator side-effect. Consolidation would touch ~15 callsites and require migration logic. Until that cost is justified by a concrete pain point (e.g. observed drift bugs, a perf issue, a feature blocked by the split), the asymmetry stands.
+
+### Mitigation we DO apply
+
+- The repair function runs on **every** `curator run`, so drift is bounded to the curator interval (currently daily at 3am).
+- The disk scan + outcome index are idempotent; running them multiple times produces the same result.
+- `repair_skill_use_counts()` never modifies `created_by` on existing entries (SM-LC-016), so a stuck repair can't silently reclassify skills.
+- The `tracked-manual` value introduced here is observe-only (SM-LC-017): the retention loop's existing `created_by != "autolearn"` filter (autolearn.py:870) skips them, so even if repair misbehaves, no `tracked-manual` skill gets auto-archived.
+
+### When to revisit
+
+Reopen this design decision when any of these becomes true:
+
+- Drift between `.usage.json` and `outcomes.db` is observed in practice (repair isn't keeping up).
+- A feature needs `use_count` to be transactionally consistent with skill creation (currently it isn't — the file write and the outcome index are independent).
+- Cross-machine sync wants to ship usage telemetry (would force a decision on which store is canonical).
 
 ## Edge Cases
 
