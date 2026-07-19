@@ -207,6 +207,43 @@ def test_skill_use_counts_derived_from_skill_loads(env):
     assert counts == {"foo": 2, "bar": 1}
 
 
+# @spec SM-LC-013, SM-LC-014
+def test_skill_use_signals_returns_count_and_last_seen(env):
+    ocdb, persona = env
+    _make_opencode_db(ocdb, [
+        _tool_part("a", "s1", 1_000, "skill", input_={"name": "foo"}),
+        _tool_part("b", "s1", 5_000, "skill", input_={"name": "foo"}),
+        _tool_part("c", "s2", 9_000, "skill", input_={"name": "bar"}),
+    ])
+    idx = outcomes.OutcomeIndex(persona / outcomes.OUTCOMES_DB_NAME, ocdb)
+    idx.index()
+    signals = idx.skill_use_signals()
+    assert signals["foo"] == {"count": 2, "last_seen_ms": 5_000}
+    assert signals["bar"] == {"count": 1, "last_seen_ms": 9_000}
+
+
+def test_skill_use_signals_empty_when_no_skill_loads(env):
+    ocdb, persona = env
+    _make_opencode_db(ocdb, [
+        _tool_part("a", "s", 1, "bash", output="x"),
+    ])
+    idx = outcomes.OutcomeIndex(persona / outcomes.OUTCOMES_DB_NAME, ocdb)
+    idx.index()
+    assert idx.skill_use_signals() == {}
+
+
+def test_skill_use_signals_excludes_null_skill_name(env):
+    """A skill tool call with malformed input (no name) must not pollute signals."""
+    ocdb, persona = env
+    _make_opencode_db(ocdb, [
+        _tool_part("a", "s", 1, "skill", input_={}, output=""),  # no name
+        _tool_part("b", "s", 2, "skill", input_={"name": "foo"}),
+    ])
+    idx = outcomes.OutcomeIndex(persona / outcomes.OUTCOMES_DB_NAME, ocdb)
+    idx.index()
+    assert idx.skill_use_signals() == {"foo": {"count": 1, "last_seen_ms": 2}}
+
+
 def test_query_filters_by_min_gt_and_tool(env):
     ocdb, persona = env
     _make_opencode_db(ocdb, [

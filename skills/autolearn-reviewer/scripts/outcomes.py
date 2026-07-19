@@ -386,6 +386,33 @@ class OutcomeIndex:
         ).fetchall()
         return {r["skill_name"]: int(r["c"]) for r in rows}
 
+    # @spec CP-OUT-005, SM-LC-013, SM-LC-014
+    def skill_use_signals(self) -> dict[str, dict]:
+        """``{skill_name: {"count": int, "last_seen_ms": int}}`` derived from ``tool='skill'`` parts.
+
+        Extends :meth:`skill_use_counts` with the most recent load timestamp per
+        skill (``MAX(time_created)``). The timestamp feeds ``last_activity_at``
+        when ``repair_skill_use_counts()`` adds ``tracked-manual`` entries for
+        previously-untracked on-disk skills (SM-LC-014).
+
+        ``last_seen_ms`` is ``0`` when the outcome table has no rows for the
+        skill (defensive — should not happen since the row only exists when
+        there is at least one load).
+        """
+        rows = self.conn.execute(
+            "SELECT skill_name, COUNT(*) AS c, MAX(time_created) AS last_ms "
+            "FROM tool_outcome "
+            "WHERE tool='skill' AND skill_name IS NOT NULL "
+            "GROUP BY skill_name"
+        ).fetchall()
+        return {
+            r["skill_name"]: {
+                "count": int(r["c"]),
+                "last_seen_ms": int(r["last_ms"]) if r["last_ms"] is not None else 0,
+            }
+            for r in rows
+        }
+
     def status(self) -> dict:
         def count(sql: str) -> int:
             return int(self.conn.execute(sql).fetchone()[0])

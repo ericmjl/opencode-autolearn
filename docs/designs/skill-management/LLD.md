@@ -80,19 +80,36 @@ The `created_by: autolearn` frontmatter tag distinguishes agent-created skills f
     "last_activity_at": "2026-06-05",
     "state": "active",
     "pinned": false
+  },
+  "atomic-commits": {
+    "created_by": "tracked-manual",
+    "created_at": "2026-07-19",
+    "use_count": 5,
+    "patch_count": 0,
+    "last_activity_at": "2026-07-19",
+    "state": "active",
+    "pinned": false
   }
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| created_by | string | "autolearn" or "user" |
+| created_by | string | "autolearn", "tracked-manual", or "user" (legacy; rarely written) |
 | created_at | string | ISO date |
-| use_count | number | Times skill was loaded (currently always 0 — tracking not yet wired) |
-| patch_count | number | Times skill was patched |
-| last_activity_at | string | ISO date of last create/patch/usage |
+| use_count | number | Times skill was loaded. Authoritatively derived from the outcome index by `repair_skill_use_counts()`. |
+| patch_count | number | Times skill was patched (autolearn-created only) |
+| last_activity_at | string | ISO date of last create/patch/usage. For `tracked-manual` entries, derived from the most recent `tool='skill'` part in `opencode.db`. |
 | state | string | "active", "stale", or "archived" |
 | pinned | boolean | If true, exempt from curator transitions |
+
+#### `created_by` values and what they mean
+
+| Value | Meaning | Curator manages it? |
+|-------|---------|---------------------|
+| `"autolearn"` | Skill was created by the autolearn-reviewer agent via `skill create`. | Yes — subject to stale/archive transitions (SM-LC-007). |
+| `"tracked-manual"` | Skill was installed by the user (or a tooling installer) and lives on disk outside `.autolearn/`. Tracked for usage telemetry only, added by `repair_skill_use_counts()` when the outcome index observes at least one load. | **No** — never auto-archived, never state-transitioned. Surfaced in audits so the user can decide. |
+| `"user"` | Legacy value from earlier schema drafts. Treated the same as `"tracked-manual"` for retention purposes (not managed). | No |
 
 ### Curator State (`.curator_state.json`)
 
@@ -164,10 +181,44 @@ Configurable thresholds from `config.yaml`:
 
 Exemptions:
 - `pinned: true` skills are never transitioned
-- `created_by != "autolearn"` skills are never transitioned
+- `created_by != "autolearn"` skills are never transitioned (this explicitly includes `"tracked-manual"` entries — SM-LC-017)
 - Already-archived skills are skipped
 
 Curator is idempotent — running it multiple times produces the same result.
+
+## Usage Tracking Repair
+
+`repair_skill_use_counts()` runs as a side-effect of every `curator run` (orchestrated under CP-INT-001). Its job is to keep `.usage.json`'s `use_count` and `last_activity_at` fields in sync with the authoritative source: the `tool='skill'` parts recorded in `opencode.db` and indexed by the outcome index (CP-OUT-005).
+
+### Two phases
+
+**Phase 1 — Update existing entries.** For every skill already in `.usage.json`, copy the latest `use_count` from the outcome index and refresh `last_activity_at` if the outcome index observes a more recent load than the recorded date. Never modifies `created_by` on existing entries (SM-LC-016).
+
+**Phase 2 — Add `tracked-manual` entries for previously-untracked skills.** Scan all configured skill-discovery directories (`~/.agents/skills/`, `~/.config/opencode/skills/`, configurable via `AGENTS_SKILLS_DIR`-style env vars in future) for `SKILL.md` files. For any skill on disk that:
+
+- is **not** already in `.usage.json`, AND
+- has been **loaded at least once** (count > 0 in the outcome index)
+
+add a new entry with `created_by: "tracked-manual"`, `state: "active"`, `created_at` derived from the `SKILL.md` file mtime, `use_count` from the index, and `last_activity_at` derived from the most recent `tool='skill'` part timestamp.
+
+### Non-resurrection rule (SM-LC-015)
+
+The disk scan **must skip** any directory whose name starts with `.archive` (e.g. `.archive/`, `.archive-manual/`). This guarantees that a user who has explicitly archived a manual skill (e.g. via `mv ~/.agents/skills/foo ~/.agents/skills/.archive-manual/`) will not have it silently re-appear in `.usage.json` on the next curator run.
+
+### Why this is non-destructive
+
+`tracked-manual` entries are **observe-only**. The curator's retention loop checks `meta.get("created_by") != "autolearn"` (autolearn.py:753) and skips; the new `"tracked-manual"` value therefore falls through the same exemption the legacy `"user"` value already used. A `tracked-manual` skill is never auto-archived, never state-transitioned, and never deleted. The data exists purely so audits (manual or future tooling) can answer "is this skill actually being used?" with real signal rather than mtime heuristics.
+
+### Discovery
+
+```python
+SKILL_DISCOVERY_DIRS = [
+    Path.home() / ".agents" / "skills",
+    Path.home() / ".config" / "opencode" / "skills",
+]
+```
+
+Mirrors the directories opencode scans for skill discovery. Project-local `.agents/skills/` directories are intentionally **not** scanned — they are repo-specific and would produce noise in the global `.usage.json`. (Future work: optional project-aware scan.)
 
 ## Edge Cases
 
