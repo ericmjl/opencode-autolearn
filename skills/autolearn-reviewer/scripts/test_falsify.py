@@ -50,15 +50,17 @@ def test_claims_none_when_nothing_falsifiable(tmp_path):
     assert falsify.claims_of(skill) == []
 
 
-def test_test_suite_ranked_above_declared(tmp_path):
+def test_declared_ranked_above_test_suite(tmp_path):
+    """A declared verify: block wins over the bare test-suite heuristic: the
+    author's exact command (deps + ignores) is more trustworthy than `pytest scripts/`."""
     skill = tmp_path / "both"
     (skill / "scripts").mkdir(parents=True)
     (skill / "scripts" / "test_a.py").write_text("def test_a(): assert 1")
     (skill / "SKILL.md").write_text(
-        "---\nname: both\nverify:\n  command: \"pytest -q\"\n---\n# Both\n"
+        "---\nname: both\nverify:\n  command: \"uv run --with pytest pytest scripts/test_a.py -q\"\n---\n# Both\n"
     )
     claims = falsify.claims_of(skill)
-    assert claims[0]["method"] == "test-suite"
+    assert claims[0]["method"] == "declared"
 
 
 # ---------------------------------------------------------------------------

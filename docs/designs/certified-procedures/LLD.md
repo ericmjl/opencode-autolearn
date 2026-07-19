@@ -237,16 +237,22 @@ def cmd_falsify_verdicts(args)   # print the ledger
 ```
 
 **Deterministic-first scope:** only `test-suite` and `declared` claims are
-evaluated (the user's chosen first path). Skills with no claim get
-`verdict: inconclusive, method: none` and are left untouched. Correlation-based
-falsification (skill-load → subsequent ground-truth outcomes) is **deferred** —
-it is suggestion-only and must never auto-demote.
+evaluated (the user's chosen first path), with **declared > test-suite**
+ranking — a declared `verify:` block is the author's exact command (deps,
+ignores) and is trusted over the bare `pytest scripts/` heuristic, which may
+return `inconclusive` when a skill's tests need deps the bare command can't
+resolve. Skills with no claim get `verdict: inconclusive, method: none` and are
+left untouched. Correlation-based falsification (skill-load → subsequent
+ground-truth outcomes) is **deferred** — it is suggestion-only and must never
+auto-demote.
 
-**Batch scope:** `verify_all` scans the persona's `skills/` dir
-(autolearn-created skills — matching the curator's lifecycle scope). Verifying
-*all* discoverable skills under `~/.agents/skills/` (where most scripted,
-falsifiable skills live) is a follow-up gated behind an allowlist, since batch
-re-execution of every installed skill's tests is expensive and noisy. The
+**Batch scope:** by default `verify_all` scans the persona's `skills/` dir
+(autolearn-created skills — cheap, used by the curator). `falsify run --all`
+and `falsify run --id NAME` additionally scan `~/.agents/skills/` (where
+installed skills with test suites / `verify:` blocks live), so the harness can
+falsify skills like `autolearn-reviewer` itself. Skills not tracked in
+`.usage.json` (i.e. not autolearn-created) are **verified and flagged on
+failure but never auto-demoted** — autolearn does not manage their lifecycle. The
 outcome index, reuse-ledger derivation, and roundabout detection already cover
 all data regardless of where a skill lives.
 
@@ -335,8 +341,9 @@ Three top-level nouns, parallel to `retention` / `topics`:
 
 ## Edge Cases
 
-1. **A skill with both a test suite and a `verify:` block** — the test suite
-   wins (strongest claim); the declared block is noted but not run.
+1. **A skill with both a test suite and a `verify:` block** — the declared
+   block wins (the author's exact command, with deps/ignores, is trusted over
+   the bare test-suite heuristic); the test suite is noted but not run.
 2. **Non-deterministic tests** — a single fail is enough to demote (fail_count
    reaches threshold on first failure). Pinned skills (`pinned: true` in
    `.usage.json`) are exempt from auto-demote (flagged only), matching the

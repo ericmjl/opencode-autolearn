@@ -98,17 +98,23 @@ def _read_frontmatter_verify(skill_md: Path) -> dict | None:
 
 # @spec CP-FAL-001
 def claims_of(skill_dir: Path) -> list[dict]:
-    """Falsifiable claims, strongest first: test-suite > declared."""
+    """Falsifiable claims, strongest first: declared > test-suite > none.
+
+    A declared ``verify:`` block wins because the author specified the exact
+    command (deps, ignores, etc.); the bare test-suite command is a best-effort
+    fallback for skills that ship tests but no declared block, and may come back
+    inconclusive when those tests need deps the bare command can't resolve.
+    """
     claims: list[dict] = []
+    declared = _read_frontmatter_verify(skill_dir / "SKILL.md")
+    if declared:
+        claims.append({"method": "declared", **declared})
     scripts_dir = skill_dir / "scripts"
     if scripts_dir.is_dir():
         tests = sorted(scripts_dir.glob("test_*.py"))
         if tests:
             claims.append({"method": "test-suite",
                            "tests": [str(p.relative_to(skill_dir)) for p in tests]})
-    declared = _read_frontmatter_verify(skill_dir / "SKILL.md")
-    if declared:
-        claims.append({"method": "declared", **declared})
     return claims
 
 
@@ -226,15 +232,38 @@ def _save_usage(skills_dir: Path, usage: dict) -> None:
 # @spec CP-FAL-002
 def verify_all(skills_dir: Path, verdicts_path: Path, *,
                config: dict | None = None, dry_run: bool = False,
-               only: str | None = None) -> dict:
-    """Verify every active skill; write the verdict ledger; return a summary."""
+               only: str | None = None, extra_dirs: list[Path] | None = None) -> dict:
+    """Verify every active skill; write the verdict ledger; return a summary.
+
+    By default scans ``skills_dir`` (the persona's autolearn-created skills).
+    ``extra_dirs`` extends the scan (e.g. ``~/.agents/skills/``) so installed
+    skills with falsifiable claims can be verified too. Skills are deduped by
+    name (first occurrence wins). Installed skills not tracked in ``.usage.json``
+    are verified and flagged on failure but never auto-demoted (autolearn only
+    manages the lifecycle of skills it created).
+    """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     usage = _load_usage(skills_dir)
     ledger = _load_verdicts(verdicts_path)
     summary = {"pass": 0, "fail": 0, "inconclusive": 0, "demoted": 0}
 
-    skill_dirs = [d for d in sorted(skills_dir.iterdir())
-                  if d.is_dir() and (d / "SKILL.md").exists()]
+    seen: dict[str, Path] = {}  # name -> chosen dir
+    for d in [skills_dir, *(extra_dirs or [])]:
+        if not d.is_dir():
+            continue
+        for sd in sorted(d.iterdir()):
+            if not (sd.is_dir() and (sd / "SKILL.md").exists()):
+                continue
+            name = sd.name
+            if name not in seen:
+                seen[name] = sd
+            elif not claims_of(seen[name]) and claims_of(sd):
+                # prefer a duplicate that actually has a falsifiable claim
+                # (e.g. an installed skill with a test suite / verify: block
+                # over a persona-local prose stub of the same name)
+                seen[name] = sd
+    skill_dirs = list(seen.values())
+
     for sd in skill_dirs:
         name = sd.name
         if only and name != only:
@@ -265,8 +294,11 @@ def apply_consequences(usage: dict, ledger: dict, *, config: dict | None = None,
                        dry_run: bool = False) -> dict:
     """Demote skills whose deterministic fail_count reached the threshold.
 
-    Pinned skills are flagged only (never demoted). Probabilistic verdicts are
-    never produced by this module, so nothing here acts on weak evidence.
+    Only skills already tracked in ``usage`` (autolearn-created) may be demoted.
+    Pinned skills are flagged only (never demoted). Skills not in ``usage``
+    (e.g. installed skills surfaced via ``--all``) are flagged only — autolearn
+    does not manage their lifecycle. Probabilistic verdicts are never produced
+    by this module, so nothing here acts on weak evidence.
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     threshold = int(cfg["falsify_fail_demote_after"])
@@ -276,10 +308,14 @@ def apply_consequences(usage: dict, ledger: dict, *, config: dict | None = None,
             continue
         if int(v.get("fail_count", 0)) < threshold:
             continue
-        meta = usage.setdefault(name, {})
-        pinned = bool(meta.get("pinned"))
         flag = {"skill": name, "fail_count": v["fail_count"],
                 "evidence": v.get("evidence", "")[:200]}
+        if name not in usage:
+            # not managed by autolearn — report only, never demote/pollute usage
+            out["flagged"].append(flag)
+            continue
+        meta = usage[name]
+        pinned = bool(meta.get("pinned"))
         if pinned:
             out["flagged"].append(flag)
             continue
@@ -308,19 +344,26 @@ def cmd_falsify_run(args):
     verdicts_path = persona_dir / VERDICTS_FILE
     only = getattr(args, "id", None)
     dry = bool(getattr(args, "dry_run", False))
-    summary = verify_all(skills_dir, verdicts_path, only=only, dry_run=dry)
+    scan_all = bool(getattr(args, "all", False))
+    # When verifying a specific skill by name or scanning everything, also look
+    # under the installed-skills dir (~/.agents/skills) — that's where skills
+    # with test suites / declared verify: blocks actually live.
+    agents_dir = Path(os.environ.get("AGENTS_SKILLS_DIR", Path.home() / ".agents" / "skills"))
+    extra = [agents_dir] if (scan_all or only) else []
+    summary = verify_all(skills_dir, verdicts_path, only=only, dry_run=dry, extra_dirs=extra)
     usage = _load_usage(skills_dir)
     cons = apply_consequences(usage, summary["ledger"], dry_run=dry)
     if not dry:
         _save_usage(skills_dir, usage)
-    print(f"Falsified skills: {summary['pass']} pass, {summary['fail']} fail, "
+    scope = "all (persona + installed)" if extra else "persona-only"
+    print(f"Falsified skills [{scope}]: {summary['pass']} pass, {summary['fail']} fail, "
           f"{summary['inconclusive']} inconclusive.")
     if cons["demoted"]:
         print(f"Demoted to stale ({'would' if dry else 'did'}):")
         for d in cons["demoted"]:
             print(f"  {d['skill']} (fails={d['fail_count']})")
     if cons["flagged"]:
-        print("Flagged (pinned / already stale):")
+        print("Flagged (installed / pinned / already stale):")
         for d in cons["flagged"]:
             print(f"  {d['skill']} (fails={d['fail_count']})")
 
