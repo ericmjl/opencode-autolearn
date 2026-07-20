@@ -277,6 +277,36 @@ automated "hygiene" loop on a noisy signal makes the system worse than no-op.
   the review flagged; deterministic-first is the genuine Schema-grade path.
 - Auto-demote on correlation: rejected — unsafe on a noisy, drift-blind signal.
 
+### Decision 13: Long-horizon skill loop — evidence-driven creation + usage-driven pruning — _in flight_
+
+**Choice**: Replace reactive-per-session skill creation with a two-part loop on
+the Certified Procedures substrate. (1) A **proposer** studies many sessions,
+clusters by user-request similarity (overlap coefficient + light stemming) +
+the modal resolution, and **stages a proposal** when a cluster recurs across
+≥ N sessions; a proposal **auto-promotes to a skill only when its common
+resolution passes falsification**. (2) The reviewer's `skill create` is
+**hard-gated** on a recurrence check (`proposals recurrence`) — it may not
+create a new skill unless the pattern is cross-session recurrent; otherwise it
+records a memory. (3) A **never-used pruner** auto-archives autolearn-created
+skills with `use_count == 0` past a grace period (using the repaired use_count).
+
+**Rationale**: The reviewer evaluated one session slice at a time and created
+skills from single-conversation patterns, producing a pile of narrow, often-
+unused skills with no feedback loop. The proposer adds the missing long-horizon
+synthesis; the hard gate prevents new myopic creation at its source; the pruner
+closes the loop on waste using the now-repaired use signal. Auto-promotion is
+gated on deterministic falsification, so only verified recurring procedures
+become skills.
+
+**Alternatives considered**:
+- Advisory-only proposer (reviewer free to ignore): rejected — the user flagged
+  the myopic-creation waste; a soft gate would not fix it.
+- Auto-archive never-used immediately: rejected — a grace period gives newly
+  created skills a runway to accrue use before becoming prune-eligible.
+- Human-confirm every proposal: rejected as the default — the user chose
+  falsification-gated auto-promotion; manual confirm remains available via
+  `proposals confirm`.
+
 ## Data Store Layout
 
 ### Current (shipped)
@@ -337,6 +367,9 @@ Existing flat-layout installs are migrated to `personas/default/` automatically 
 | Outcome Index | in flight | Indexes `opencode.db` tool-call + step-cost + skill-load parts the FTS5 index excludes; ground-truth-weighted; repairs `.usage.json` use_count. | `outcomes.py`, `autolearn.py` |
 | Procedure Falsification | in flight | Deterministic verification of skills (test-suite / declared claims); auto-demote + flag failures; probabilistic deferred as suggestion-only. | `falsify.py`, `autolearn.py` |
 | Golden-Path Shortcuts | in flight | Detects expensive roundabout tool sequences, extracts the direct invocation, promotes it gated by falsification. | `shortcuts.py`, `autolearn.py` |
+| Long-Horizon Proposer | in flight | Cross-session clustering of user requests + resolutions; stages proposals; auto-promotes when falsification passes. | `proposer.py`, `autolearn.py` |
+| Reviewer Recurrence Gate | in flight | Hard-gates `skill create` on `proposals recurrence` — ends myopic per-session skill creation. | `autolearn-reviewer/SKILL.md`, `proposer.py` |
+| Never-Used Skill Pruner | in flight | Auto-archives autolearn-created skills with `use_count==0` past a grace period (uses repaired use_count). | `autolearn.py` |
 
 ## Risks and Mitigations
 

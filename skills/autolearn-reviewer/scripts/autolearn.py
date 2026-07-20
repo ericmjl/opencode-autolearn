@@ -59,6 +59,10 @@ import outcomes
 import falsify
 import shortcuts
 
+# Long-horizon skill loop (proposer + pruner).
+# See docs/designs/long-horizon-skills/LLD.md.
+import proposer
+
 # @spec KS-MEM-020
 DATA_HOME = Path(os.environ.get("AUTOLEARN_HOME", Path.home() / ".autolearn"))
 
@@ -385,6 +389,110 @@ def _scan_skill_dirs_for_repair() -> dict:
                 mtime_iso = date.today().isoformat()
             found[entry.name] = mtime_iso
     return found
+
+
+# @spec LH-PROP-003 — auto-promote verified proposals to skills (gated by falsify)
+def promote_proposals() -> dict:
+    """Create skills for proposals whose common_resolution passed falsification.
+
+    The created skill carries a ``verify:`` block (the common_resolution), so the
+    new skill is itself falsifiable. Mirrors ``cmd_skill_create`` but is driven by
+    proposals and marks each consumed proposal ``promoted``.
+    """
+    proposals = proposer._load(ACTIVE_PERSONA_DIR)
+    ready = [p for p in proposals.values()
+             if p.get("status") == "pending" and p.get("verified") is True]
+    created, skipped = [], []
+    usage = load_usage()
+    for p in ready:
+        name = slugify((p.get("request_summary") or p.get("common_resolution") or "skill"))[:60]
+        if not name:
+            name = "skill"
+        skill_dir = SKILLS_DIR / name
+        skill_file = skill_dir / "SKILL.md"
+        if skill_file.exists() or name in usage:
+            p["status"] = "promoted"
+            p["promoted_skill"] = name
+            skipped.append(name)
+            continue
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        desc = (p.get("request_summary") or "Auto-promoted from a recurring cross-session pattern.")[:200]
+        cmd = p.get("common_resolution") or ""
+        content = (
+            f"---\nname: {name}\ndescription: |\n  {desc}\n"
+            f"created_by: autolearn\ncreated_at: \"{date.today().isoformat()}\"\n"
+            "verify:\n"
+            f"  command: \"{cmd}\"\n"
+            "  expect_exit: 0\n---\n\n"
+            f"# {name.replace('-', ' ').title()}\n\n{desc}\n\n"
+            "## Instructions\n\n"
+            f"This skill was auto-promoted because users repeatedly requested it across "
+            f"{p.get('sessions_count', 0)} sessions, and the direct invocation was "
+            "verified to pass. Replace this TODO with concrete procedural steps.\n"
+        )
+        skill_file.write_text(content)
+        usage[name] = {
+            "created_by": "autolearn", "created_at": date.today().isoformat(),
+            "use_count": 0, "patch_count": 0,
+            "last_activity_at": date.today().isoformat(), "state": "active",
+            "promoted_from": p.get("id"),
+        }
+        link_path = AGENTS_SKILLS_DIR / name
+        AGENTS_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+        if not link_path.exists():
+            try:
+                link_path.symlink_to(skill_dir)
+            except OSError:
+                pass
+        p["status"] = "promoted"
+        p["promoted_skill"] = name
+        created.append(name)
+    save_usage(usage)
+    proposer._save(ACTIVE_PERSONA_DIR, proposals)
+    return {"created": created, "skipped_already_existed": skipped}
+
+
+# @spec LH-PRUNE-001 — never-used pruner (use_count × age)
+def prune_unused_skills(config: dict) -> dict:
+    """Auto-archive autolearn-created skills with use_count==0 past the grace period.
+
+    Uses the repaired use_count (derived from outcomes index skill-load counts).
+    Pinned skills and non-autolearn skills are exempt.
+    """
+    grace = int(config.get("unused_grace_days", 60))
+    today = date.today()
+    usage = load_usage()
+    archived = []
+    for name, meta in list(usage.items()):
+        if meta.get("state") == "archived" or meta.get("pinned"):
+            continue
+        if meta.get("created_by") != "autolearn":
+            continue
+        use_count = int(meta.get("use_count") or 0)
+        if use_count != 0:
+            continue
+        created_str = meta.get("created_at") or meta.get("last_activity_at")
+        if not created_str:
+            continue
+        try:
+            age_days = (today - date.fromisoformat(created_str)).days
+        except ValueError:
+            continue
+        if age_days <= grace:
+            continue
+        skill_dir = SKILLS_DIR / name
+        if skill_dir.exists() and not (ARCHIVE_DIR / name).exists():
+            ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+            try:
+                skill_dir.rename(ARCHIVE_DIR / name)
+            except OSError:
+                continue
+        meta["state"] = "archived"
+        meta["archived_at"] = today.isoformat()
+        archived.append(name)
+    if archived:
+        save_usage(usage)
+    return {"archived": archived, "grace_days": grace}
 
 
 def load_config() -> dict:
@@ -929,6 +1037,23 @@ def cmd_curator_run(args):
     except Exception as exc:
         cp["usage_repaired"] = {"error": str(exc)}
 
+    # @spec LH-PROP-001..003, LH-PRUNE-001 — long-horizon skill loop (best-effort)
+    lh = {"scanned": None, "promoted": None, "pruned": None}
+    try:
+        lh["scanned"] = proposer.scan(ACTIVE_PERSONA_DIR)
+        lh["verified"] = proposer.verify_pending(ACTIVE_PERSONA_DIR)
+        lh["promoted"] = promote_proposals()
+    except Exception as exc:
+        lh["scanned"] = {"error": str(exc)}
+    try:
+        lh["pruned"] = prune_unused_skills(config)
+        if lh["pruned"]["archived"]:
+            transitions.setdefault("archived", []).extend(
+                [n for n in lh["pruned"]["archived"] if n not in transitions["archived"]]
+            )
+    except Exception as exc:
+        lh["pruned"] = {"error": str(exc)}
+
     run_record = {
         "date": today.isoformat(),
         "transitions": transitions,
@@ -936,6 +1061,7 @@ def cmd_curator_run(args):
             {"entry": e, "strength": s} for e, s in escalation_candidates
         ],
         "certified_procedures": cp,
+        "long_horizon": lh,
     }
     state["last_run"] = today.isoformat()
     state["runs"].append(run_record)
@@ -972,6 +1098,14 @@ def cmd_curator_run(args):
             print(f"  usage tracking: repaired use_count on {ur['updated']} skill(s)")
         if ur.get("added"):
             print(f"  usage tracking: newly tracking {ur['added']} manual skill(s)")
+    # Long-horizon skill loop summary
+    lh = run_record.get("long_horizon", {})
+    if isinstance(lh.get("promoted"), dict) and (lh["promoted"].get("created") or lh["promoted"].get("skipped_already_existed")):
+        print(f"  proposals: promoted {len(lh['promoted']['created'])} new skill(s)"
+              + (f", {len(lh['promoted']['skipped_already_existed'])} already existed" if lh["promoted"]["skipped_already_existed"] else ""))
+    if isinstance(lh.get("pruned"), dict) and lh["pruned"].get("archived"):
+        print(f"  pruner: auto-archived {len(lh['pruned']['archived'])} never-used skill(s): "
+              f"{', '.join(lh['pruned']['archived'])}")
 
 
 # @spec SM-LC-010
@@ -2056,6 +2190,18 @@ def main():
     sho_det.add_argument("--dry-run", action="store_true", help="Report without saving candidates")
     sho_sub.add_parser("list", help="List staged golden-path candidates")
 
+    # --- Long-horizon skill loop commands ---
+    pro = sub.add_parser("proposals", help="Cross-session skill proposals + recurrence gate", parents=[persona_parent])
+    pro_sub = pro.add_subparsers(dest="subcommand")
+    pro_sub.add_parser("list", help="List pending/promoted/dismissed proposals")
+    pro_sub.add_parser("scan", help="Scan recent sessions; stage + verify proposals")
+    pro_rec = pro_sub.add_parser("recurrence", help="Hard-gate check: does a request recur across sessions?")
+    pro_rec.add_argument("text", help="The candidate pattern / user request text")
+    pro_conf = pro_sub.add_parser("confirm", help="Manually force-promote a proposal")
+    pro_conf.add_argument("id", help="Proposal id")
+    pro_dis = pro_sub.add_parser("dismiss", help="Dismiss a proposal")
+    pro_dis.add_argument("id", help="Proposal id")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -2132,6 +2278,13 @@ def main():
         "shortcuts": {
             "detect": shortcuts.cmd_shortcuts_detect,
             "list": shortcuts.cmd_shortcuts_list,
+        },
+        "proposals": {
+            "list": proposer.cmd_proposals_list,
+            "scan": proposer.cmd_proposals_scan,
+            "recurrence": proposer.cmd_proposals_recurrence,
+            "confirm": proposer.cmd_proposals_confirm,
+            "dismiss": proposer.cmd_proposals_dismiss,
         },
     }
 
