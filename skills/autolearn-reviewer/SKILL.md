@@ -251,8 +251,29 @@ just check `user list` for semantic duplicates before adding.
 
 ### Step 7: Create or patch skills
 
-If you see a repeatable pattern, technique, or workflow that deserves
-its own skill:
+**HARD GATE — recurrence check (required before ANY `skill create`).** Before
+creating a new skill, you MUST verify the pattern recurs across sessions, not
+just this one conversation (single-session creation is myopic and produces
+wasted, unused skills). Run:
+
+```bash
+uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py proposals recurrence "<key terms of the pattern>"
+```
+
+- `recurrent=true` → you MAY create a new skill (proceed to `skill create`).
+- `recurrent=false` → you MUST NOT `skill create`. Record the pattern as a
+  **memory** instead (`memory add`), or **strengthen** an existing skill/memory.
+  If the pattern genuinely recurs in later sessions, the proposer will stage it
+  and auto-promote it once verified — nothing is lost, creation is just deferred
+  until evidence accumulates.
+- If the command errors or the index is missing, treat it as `recurrent=false`
+  (fail-safe: record a memory, do not create).
+
+PATCHING an existing skill (`skill patch`) is **not** gated — patch whenever an
+existing skill was wrong or incomplete.
+
+If you see a repeatable pattern, technique, or workflow that **passed the
+recurrence gate** and deserves its own skill:
 
 ```bash
 uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py skill create <name> "<description>"
@@ -266,9 +287,9 @@ uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py skill patch 
 
 Preference order for skill actions:
 
-1. PATCH an existing skill that was loaded during the conversation
-2. ADD a section to an existing umbrella skill
-3. CREATE a new skill for a distinct pattern
+1. PATCH an existing skill that was loaded during the conversation (no gate)
+2. ADD a section to an existing umbrella skill (no gate)
+3. CREATE a new skill — **only if `proposals recurrence` returned `recurrent=true`**
 
 **Token-efficiency trigger (acts on signal #7):** when the conversation
 contained EXPENSIVE DISCOVERY (a `--help` chain 2+ levels deep,
