@@ -36,13 +36,25 @@ import uuid as uuid_mod
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-import requests
-import yaml
+try:
+    import requests
+    RequestsError = requests.RequestException
+except ImportError:  # optional dep: only needed for sync; tests/CLI import fine without it
+    requests = None  # type: ignore[assignment]
+    RequestsError = OSError
+
+try:
+    import yaml
+except ImportError:  # config/frontmatter parsing needs yaml at call time; import stays light
+    yaml = None  # type: ignore[assignment]
 from slugify import slugify as python_slugify
 
 # Make sync_crypto.py importable when run via uv run / pytest.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import sync_crypto
+try:
+    import sync_crypto
+except ImportError:  # cryptography only needed for sync; module stays importable without it
+    sync_crypto = None  # type: ignore[assignment]
 
 # Memory Insight subsystem (registry + retention + composer + shift + ui).
 # These are siblings in the same scripts dir; imported here so the CLI can
@@ -1703,13 +1715,13 @@ def get_server_url() -> str:
 
 # @spec SYNC-PROTO-001, SYNC-PROTO-014
 def sync_request(method: str, path: str, *, body: dict | None = None,
-                  timeout: float = 30.0, allow_register: bool = False) -> requests.Response:
+                  timeout: float = 30.0, allow_register: bool = False) -> "requests.Response":
     api_key = get_api_key()
     url = f"{get_server_url().rstrip('/')}{path}"
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
         return requests.request(method, url, json=body, headers=headers, timeout=timeout)
-    except requests.RequestException as exc:
+    except RequestsError as exc:
         # @spec SYNC-PROTO-014
         raise SystemExit(f"Sync server unreachable at {url}: {exc}") from exc
 
@@ -1724,7 +1736,7 @@ def ensure_registered(api_key: str) -> str:
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
         r = requests.get(url, headers=headers, timeout=10)
-    except requests.RequestException as exc:
+    except RequestsError as exc:
         raise SystemExit(f"Sync server unreachable at {url}: {exc}") from exc
 
     if r.status_code == 200:
@@ -1735,7 +1747,7 @@ def ensure_registered(api_key: str) -> str:
         reg_url = f"{get_server_url().rstrip('/')}/sync/register"
         try:
             reg = requests.post(reg_url, json={"api_key": api_key}, timeout=10)
-        except requests.RequestException as exc:
+        except RequestsError as exc:
             raise SystemExit(f"Sync server unreachable at {reg_url}: {exc}") from exc
         if reg.status_code == 201:
             return reg.json().get("user_id") or sync_crypto.api_key_id(api_key)
