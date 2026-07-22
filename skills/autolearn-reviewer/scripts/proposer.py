@@ -300,10 +300,12 @@ def scan(persona_dir: Path, *, config: dict | None = None) -> dict:
 
 # @spec LH-PROP-002
 def verify_pending(persona_dir: Path, *, config: dict | None = None) -> dict:
-    """Run falsify on each pending proposal's common_resolution.
+    """Run falsify on each *unverified* pending proposal's common_resolution.
 
-    verified = True only on a clean pass; False on fail; null on inconclusive /
-    unsafe (proposal stays pending). Auto-promotion consumes only verified=True.
+    Only proposals with ``verified is None`` are processed, so frequent scans
+    stay cheap (known-pass proposals are promoted; known-fail proposals are not
+    re-run). verified = True only on a clean pass; False on fail; null on
+    inconclusive / unsafe (stays pending). Auto-promotion consumes verified=True.
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     proposals = _load(persona_dir)
@@ -311,6 +313,8 @@ def verify_pending(persona_dir: Path, *, config: dict | None = None) -> dict:
     for pid, p in proposals.items():
         if p.get("status") != "pending":
             continue
+        if p.get("verified") is not None:
+            continue  # already verified — skip (keeps frequent scans cheap)
         cmd = p.get("common_resolution")
         if not cmd:
             p["verified"] = None
