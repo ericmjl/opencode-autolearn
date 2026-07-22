@@ -403,6 +403,23 @@ def _scan_skill_dirs_for_repair() -> dict:
     return found
 
 
+# @spec LH-PROP-001..003 — full proposer loop as a single CLI entry point
+def cmd_proposals_scan(args):
+    """scan -> verify -> promote. Self-contained for frequent (scheduled) runs."""
+    summary = proposer.scan(ACTIVE_PERSONA_DIR)
+    print(f"Scanned {summary['sessions_scanned']} sessions: "
+          f"{summary['new']} new proposals, {summary['updated']} updated "
+          f"({summary['proposals_total']} total).")
+    res = proposer.verify_pending(ACTIVE_PERSONA_DIR)
+    print(f"Verified {res['checked']} unverified proposals: "
+          f"{res['verified']} passed (auto-promote-ready).")
+    promo = promote_proposals()
+    if promo["created"]:
+        print(f"Promoted {len(promo['created'])} new skill(s): {', '.join(promo['created'])}")
+    if promo["skipped_already_existed"]:
+        print(f"({len(promo['skipped_already_existed'])} proposal(s) matched an existing skill)")
+
+
 # @spec LH-PROP-003 — auto-promote verified proposals to skills (gated by falsify)
 def promote_proposals() -> dict:
     """Create skills for proposals whose common_resolution passed falsification.
@@ -2293,7 +2310,7 @@ def main():
         },
         "proposals": {
             "list": proposer.cmd_proposals_list,
-            "scan": proposer.cmd_proposals_scan,
+            "scan": cmd_proposals_scan,
             "recurrence": proposer.cmd_proposals_recurrence,
             "confirm": proposer.cmd_proposals_confirm,
             "dismiss": proposer.cmd_proposals_dismiss,
