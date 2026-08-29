@@ -26,10 +26,18 @@ echo "opencode-autolearn installer"
 echo "============================"
 echo ""
 
-# 1. Copy plugin
+# 1. Copy plugin (v1 shell, v2 shell, shared core). The core uses a .mjs
+# extension so OpenCode v2's plugins/ auto-discovery does not try to load
+# it as a plugin (only .js/.ts files are discovered).
 echo "[1/5] Installing plugin..."
 mkdir -p "$PLUGIN_DIR"
 cp "$REPO_DIR/plugin/autolearn.js" "$PLUGIN_DIR/"
+cp "$REPO_DIR/plugin/autolearn-v2.js" "$PLUGIN_DIR/"
+cp "$REPO_DIR/plugin/autolearn-core.mjs" "$PLUGIN_DIR/"
+# Remove any stray pre-.mjs core copy from earlier installs (the .js name
+# would be picked up by OpenCode v2's plugins/ auto-discovery and fail
+# schema validation with a warning).
+rm -f "$PLUGIN_DIR/autolearn-core.js"
 
 # 2. Copy skills
 echo "[2/5] Installing skills..."
@@ -55,7 +63,10 @@ else:
 
 changed = False
 
-# plugin
+# plugin — v1 shell (read by OpenCode v1 via the `plugin` key; OpenCode v2
+# normalizes the same key, where the v1 function export is expected to fail
+# schema validation with a warning — harmless, the v2 entry below is what
+# v2 actually loads).
 if 'plugin' not in data:
     data['plugin'] = []
 plugins = data['plugin'] if isinstance(data['plugin'], list) else [data['plugin']]
@@ -65,15 +76,30 @@ if plugin_entry not in plugins:
     data['plugin'] = plugins
     changed = True
 
+# plugins — v2 shell (native v2 key; OpenCode v1 ignores unknown top-level
+# keys, so both versions can share this file).
+if 'plugins' not in data:
+    data['plugins'] = []
+plugins_v2 = data['plugins'] if isinstance(data['plugins'], list) else [data['plugins']]
+plugin_v2_entry = './plugins/autolearn-v2.js'
+if plugin_v2_entry not in plugins_v2:
+    plugins_v2.append(plugin_v2_entry)
+    data['plugins'] = plugins_v2
+    changed = True
+
 # instructions — point at the generated context view (Memory Insight);
 # strip any superseded memory.md paths (persona + flat-layout).
 if 'instructions' not in data:
     data['instructions'] = []
 instructions = data['instructions'] if isinstance(data['instructions'], list) else [data['instructions']]
 ctx_entry = os.path.expanduser('~/.autolearn/personas/default/memory.context.md')
+# Strip superseded memory.md paths (persona + flat layout), matching both
+# expanded absolute paths and literal-tilde forms.
 superseded = {
     os.path.expanduser('~/.autolearn/personas/default/memory.md'),
     os.path.expanduser('~/.autolearn/memory.md'),
+    '~/.autolearn/personas/default/memory.md',
+    '~/.autolearn/memory.md',
 }
 if any(i in superseded for i in instructions):
     instructions = [i for i in instructions if i not in superseded]
@@ -133,6 +159,8 @@ fi
 echo "[5/5] Verifying..."
 OK=true
 [[ -f "$PLUGIN_DIR/autolearn.js" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn.js"; OK=false; }
+[[ -f "$PLUGIN_DIR/autolearn-v2.js" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn-v2.js"; OK=false; }
+[[ -f "$PLUGIN_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn-core.mjs"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn-reviewer/SKILL.md" ]] || { echo "  MISSING: skills/autolearn-reviewer"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn-curator/SKILL.md" ]] || { echo "  MISSING: skills/autolearn-curator"; OK=false; }
 [[ -f "$SKILLS_DIR/self-improving-agent/SKILL.md" ]] || { echo "  MISSING: skills/self-improving-agent"; OK=false; }
