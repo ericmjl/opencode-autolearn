@@ -1,0 +1,22 @@
+README.md
+  h_923f9eef54c2c1 3,13-14,19-20,22-23,31-34,56,58-59,71,76-77,94-111,115,117,139,163,218-220,260-261,269-270,302-307,312-315
+install.sh
+  h_923f9eef54c2c1 29-31,35-40,66-69,79-89,96-97,101-102,162-163
+plugin/autolearn-core.mjs
+  h_923f9eef54c2c1 1-409
+plugin/autolearn-v2.js
+  h_923f9eef54c2c1 1-290
+plugin/autolearn.js
+  h_923f9eef54c2c1 2,5-8,16,18,26,31-32,38,42,55,57-58,64-65,74,76,79-86,90,93,95,107,113-119,121,123,129,140,156,158,175,179,182,185,187,193,196,233-234,243,251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "60508f3d86217060a5aecfcdf7b192293b3a9c5a",
+  "prompts": {},
+  "humans": {
+    "h_923f9eef54c2c1": {
+      "author": "Eric Ma <ericmajinglong@gmail.com>"
+    }
+  }
+}
