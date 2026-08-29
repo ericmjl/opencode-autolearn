@@ -1,0 +1,28 @@
+skills/autolearn-reviewer/scripts/autolearn.py
+  h_923f9eef54c2c1 620,640,773,1225,1234-1238,1244-1258,1283,1327-1399,1405,1408-1413,1573-1576,1583-1587,1589,1686
+skills/autolearn-reviewer/scripts/composer.py
+  h_923f9eef54c2c1 97
+skills/autolearn-reviewer/scripts/falsify.py
+  h_923f9eef54c2c1 210,227
+skills/autolearn-reviewer/scripts/inspector_server.py
+  h_923f9eef54c2c1 80
+skills/autolearn-reviewer/scripts/proposer.py
+  h_923f9eef54c2c1 194
+skills/autolearn-reviewer/scripts/registry.py
+  h_923f9eef54c2c1 261-264,361
+skills/autolearn-reviewer/scripts/shift.py
+  h_923f9eef54c2c1 149
+skills/autolearn-reviewer/scripts/shortcuts.py
+  h_923f9eef54c2c1 224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "1affafe04020cd7d5a6349f953bf1c2e1ea728cc",
+  "prompts": {},
+  "humans": {
+    "h_923f9eef54c2c1": {
+      "author": "Eric Ma <ericmajinglong@gmail.com>"
+    }
+  }
+}
