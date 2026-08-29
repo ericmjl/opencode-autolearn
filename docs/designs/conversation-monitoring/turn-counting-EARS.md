@@ -26,7 +26,7 @@
 
 ## Memory Injection
 
-- [x] **CM-MEM-001**: When the plugin loads, the system shall add `~/.autolearn/memory.md` to the opencode.json instructions array if not already present.
+- [x] **CM-MEM-001**: When the plugin loads, the system shall add the memory instruction path to the opencode.json instructions array if not already present. *(Superseded by MI-CMP-009: the injected path is now `~/.autolearn/personas/default/memory.context.md`; legacy `memory.md` paths are actively removed.)*
 
 ## Reviewer Guard
 

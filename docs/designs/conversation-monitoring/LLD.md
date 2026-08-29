@@ -3,6 +3,20 @@
 **Created**: 2026-06-05
 **HLD Link**: ../high-level-design.md
 
+> **OpenCode v2 (beta) note**: this LLD describes the v1 surface
+> (`plugin/autolearn.js`, registered under the `plugin` config key). The v2
+> shell (`plugin/autolearn-v2.js`, registered under `plugins`) implements the
+> same loop against the v2 event stream: user text via
+> `session.inbox.enqueued` (`item.payload.text`), assistant turns via
+> `session.text.ended` + `session.step.ended`, idle via
+> `session.execution.succeeded|failed|interrupted` boundaries, per-session
+> state (the v2 stream is location-scoped, so no global primary-instance
+> guard), and reviewer-session detection by agent/title in addition to the
+> env guard. Shared logic lives in `plugin/autolearn-core.mjs`; reviews spawn
+> through the version-aware wrapper (`opencode`/`opencode2`, with
+> `opencode2 api delete` session cleanup). v2 has no exit reviews — the
+> service outlives TUI sessions.
+
 ## Overview
 
 The autolearn.js plugin hooks into OpenCode session events to count conversation turns, buffer messages (with redaction), detect idle periods, and spawn review subagents at configurable thresholds. This is the entry point for all learning — no monitoring means no reviews.

@@ -1,10 +1,10 @@
 # OpenCode Autolearn - High-Level Design
 
 **Created**: 2026-06-05
-**Last updated**: 2026-06-22
+**Last updated**: 2026-08-29
 
 > **Status legend** — Feature Breakdown and Key Design Decisions mark each item as
-> `shipped` (implemented in `autolearn.py` / `autolearn.js`), `planned` (designed
+> `shipped` (implemented in `autolearn.py` / the plugin shells `autolearn.js` + `autolearn-v2.js`), `planned` (designed
 > but not yet implemented), or `partial`. Sync (E2E encryption, Fastify + Convex
 > backends, multi-persona, plugin auto-sync) is shipped. Deferred: `rotate-key`,
 > interactive conflict resolution, salt auto-bootstrap, project-level persona mapping.
@@ -55,7 +55,9 @@ Machine A                              Machine B
 │         OpenCode Runtime         │   │         OpenCode Runtime         │
 │                                  │   │                                  │
 │  ┌────────────────────────────┐  │   │  ┌────────────────────────────┐  │
-│  │     autolearn.js (Plugin)  │  │   │  │     autolearn.js (Plugin)  │  │
+│  │  autolearn plugin shells   │  │   │  │  autolearn plugin shells   │  │
+│  │  (v1 .js / v2 -v2.js over  │  │   │  │  (v1 .js / v2 -v2.js over  │  │
+│  │  autolearn-core.mjs)        │  │   │  │  autolearn-core.mjs)        │  │
 │  │  Turn Counter → Buffer     │  │   │  │  Turn Counter → Buffer     │  │
 │  │  → Idle → Review Spawner   │  │   │  │  → Idle → Review Spawner   │  │
 │  └────────────┬───────────────┘  │   │  └────────────┬───────────────┘  │
@@ -307,6 +309,35 @@ become skills.
   falsification-gated auto-promotion; manual confirm remains available via
   `proposals confirm`.
 
+### Decision 14: Dual-shell plugin for OpenCode v1 + v2 (beta) — _shipped_
+
+**Context**: OpenCode 2 (beta, binary `opencode2`) breaks the plugin API
+intentionally: v1 function-export plugins fail v2's schema validation
+(`Expected object at ["default"]`), and v2's plain-object plugins cannot be
+called by v1. Both versions share `~/.config/opencode/opencode.json` and
+`~/.local/share/opencode/opencode.db` (v2 sessions live in `session_v2` /
+`session_message` alongside v1's `session` / `message` / `part`).
+
+**Choice**: One shared core (`plugin/autolearn-core.mjs`) with two thin
+version shells — `plugin/autolearn.js` (v1 function export, registered under
+the `plugin` config key) and `plugin/autolearn-v2.js` (v2 plain-object plugin
+subscribing to the server event stream, registered under `plugins`). The
+v2 shell imports nothing beyond builtins and the core, so it loads without
+`@opencode-ai/plugin` or node_modules. Event mapping: user text via
+`session.inbox.enqueued`, assistant turns via `session.text.ended` +
+`session.step.ended`, idle via `session.execution.*` boundaries. The review
+wrapper selects the binary (`opencode`/`opencode2`) and v2 session cleanup
+uses `opencode2 api delete`. Session search indexes both table families,
+skipping v2 rows mirrored into v1 tables.
+
+**Alternatives considered**:
+- Single dual-format file: rejected — v1 requires a callable default export,
+  v2's schema requires an object; the shapes are mutually exclusive.
+- V2-only: rejected — v1 is the stable daily driver during beta.
+- Dropping the shared config (separate config files per version): rejected —
+  both versions read the same paths; the `plugin`/`plugins` key split with
+  one expected v2-side warning is the least-invasive coexistence.
+
 ## Data Store Layout
 
 ### Current (shipped)
@@ -342,26 +373,26 @@ become skills.
 └── debug.log                  # Verbose plugin output (when AUTOLEARN_DEBUG=1)
 ```
 
-Existing flat-layout installs are migrated to `personas/default/` automatically on first run after update (by both `autolearn.py` and `plugin/autolearn.js`).
+Existing flat-layout installs are migrated to `personas/default/` automatically on first run after update (by both `autolearn.py` and `plugin/autolearn-core.mjs`).
 
 ## Feature Breakdown
 
 | Feature | Status | Description | Components |
 |---------|--------|-------------|------------|
-| Conversation Monitoring | shipped | Count turns, buffer messages, detect idle, exit review | autolearn.js |
-| Review Spawning | shipped | Format and dispatch reviews at thresholds and on exit | autolearn.js |
+| Conversation Monitoring | shipped | Count turns, buffer messages, detect idle, exit review (v1); turn-boundary reviews via execution events (v2) | autolearn.js / autolearn-v2.js |
+| Review Spawning | shipped | Format and dispatch reviews via the version-aware wrapper (`opencode`/`opencode2`) | autolearn.js / autolearn-v2.js |
 | Knowledge Store | shipped | Memory, user profile, observations, reinforcement tracking | autolearn.py |
 | Skill Management | shipped | Create, patch, archive, usage tracking | autolearn.py |
 | Skill Lifecycle | shipped | Auto-transition stale/archived, curator with escalation | autolearn.py |
 | Review Agent | shipped | Examine conversations, extract learnings | autolearn-reviewer SKILL.md |
 | Session Search | shipped | FTS5 full-text search over past OpenCode conversations | autolearn.py, search.db |
 | Behavioral Escalation | shipped | Cross-project rule tracking and AGENTS.md writes | self-improving-agent/improve.py |
-| E2E-Encrypted Sync | shipped | Client-side AES-256-GCM, zero-knowledge server. Crypto, CLI (sync login/push/pull/status/export-key), plugin auto-sync. rotate-key + interactive pull deferred. | `autolearn.py` (sync), `sync-server/`, `sync-convex/`, `plugin/autolearn.js` |
+| E2E-Encrypted Sync | shipped | Client-side AES-256-GCM, zero-knowledge server. Crypto, CLI (sync login/push/pull/status/export-key), plugin auto-sync. rotate-key + interactive pull deferred. | `autolearn.py` (sync), `sync-server/`, `sync-convex/`, `plugin/autolearn-core.mjs` |
 | Multi-Persona | shipped | Isolated knowledge stores per context (work/personal/OSS). Flat-to-personas migration is automatic and backward-compatible. | autolearn.py (persona) |
 | Backend-Agnostic Sync | shipped | Fastify+SQLite (bun:sqlite) and Convex HTTP Actions both implement the same REST API. CLI is backend-agnostic. | `sync-server/`, `sync-convex/` |
 | Memory Registry | shipped | Durable unbounded `memories.jsonl` replacing the 3000-char `memory.md`; absorbs `strengths.json`; lazy legacy migration. | `registry.py`, `autolearn.py` |
 | Ebbinghaus Retention | shipped | Decay + strengthen-on-access scoring; tiering (hot/warm/cold/evictable); grace-period eviction. Embedding-free. | `retention.py`, `autolearn.py` |
-| Context Composer | shipped | Relevance × retention ranking into a soft char budget; emits `memory.context.md`; plugin regenerates on session start + after review. | `composer.py`, `plugin/autolearn.js` |
+| Context Composer | shipped | Relevance × retention ranking into a soft char budget; emits `memory.context.md`; plugin regenerates on session start + after review. | `composer.py`, `plugin/autolearn-core.mjs` |
 | Recurring-Preference Detector | shipped | Cross-session SW/EMA shift detector over lexical topic signatures; rising→candidate, falling→"learned". Embedding-free. | `shift.py`, `autolearn.py` |
 | Inspector UI | shipped | CLI-launchable local web app to explore registry, retention curves, candidates, skills, activity. Stdlib-only server. | `inspector_server.py`, `autolearn.py` |
 | Outcome Index | in flight | Indexes `opencode.db` tool-call + step-cost + skill-load parts the FTS5 index excludes; ground-truth-weighted; repairs `.usage.json` use_count. | `outcomes.py`, `autolearn.py` |
@@ -375,8 +406,8 @@ Existing flat-layout installs are migrated to `personas/default/` automatically 
 
 | Risk | Mitigation |
 |------|------------|
-| Review spawning loops | `AUTOLEARN_REVIEWER=1` guard prevents recursive spawning; buffer depth check skips reviews containing review content |
-| Lost conversation on exit | Process-level `beforeExit` and signal handlers dispatch a final review before shutdown |
+| Review spawning loops | `AUTOLEARN_REVIEWER=1` guard prevents recursive spawning; buffer depth check skips reviews containing review content. v2 additionally marks reviewer sessions by agent/title inside the shared service |
+| Lost conversation on exit | v1: process-level `beforeExit` and signal handlers dispatch a final review before shutdown. v2: the service outlives sessions; threshold + turn-boundary reviews cover the same content |
 | Memory bloat / staleness | _(Memory Insight)_ Durable unbounded `memories.jsonl` registry; forgetting driven by Ebbinghaus decay + grace-period eviction, not a FIFO char cap. Context window kept bounded by the relevance-ranked composer (soft budget). Legacy `memory.md` 3000-char FIFO cap retired post-migration. _(previously: 3000-char cap with oldest-first trimming — caused silent staleness + orphan strength records)_ |
 | Stale review files | Auto-cleanup based on `stale_after_days` config |
 | Secret leakage | Regex redaction of API keys, tokens, passwords from buffered messages |
