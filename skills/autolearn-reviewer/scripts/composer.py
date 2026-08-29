@@ -94,7 +94,7 @@ def cmd_compose(args):
 
     md = compose(reg, ctx_tokens)
     out_path = persona_dir / "memory.context.md"
-    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    tmp = out_path.with_suffix(out_path.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(md, encoding="utf-8")
     os.replace(tmp, out_path)
 

@@ -146,7 +146,7 @@ def load_candidates(persona_dir: Path) -> list[dict]:
 
 def save_candidates(persona_dir: Path, candidates: list[dict]) -> None:
     path = candidates_path(persona_dir)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         for c in candidates:
             fh.write(json.dumps(c, ensure_ascii=False) + "\n")

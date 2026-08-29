@@ -207,7 +207,7 @@ def _load_verdicts(path: Path) -> dict:
 
 
 def _save_verdicts(path: Path, data: dict) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 
@@ -224,7 +224,7 @@ def _load_usage(skills_dir: Path) -> dict:
 
 def _save_usage(skills_dir: Path, usage: dict) -> None:
     usage_file = skills_dir / ".usage.json"
-    tmp = usage_file.with_suffix(usage_file.suffix + ".tmp")
+    tmp = usage_file.with_suffix(usage_file.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(usage, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(tmp, usage_file)
 

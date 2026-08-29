@@ -258,7 +258,10 @@ class MemoryRegistry:
 
     # @spec MI-REG-009
     def save(self, records: list[dict]) -> None:
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        # pid-unique tmp: concurrent autolearn processes (plugin-spawned
+        # compose, scheduled jobs, installer) must not clobber each other's
+        # tmp files during the write->replace window.
+        tmp = self.path.with_suffix(self.path.suffix + f".{os.getpid()}.tmp")
         with tmp.open("w", encoding="utf-8") as fh:
             for r in records:
                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -355,7 +358,7 @@ def migrate_from_legacy(persona_dir: Path) -> int:
     # writes the .registry_migrated marker — so migrate_from_legacy short-
     # circuits on every subsequent call and the file is never created. An empty
     # JSONL file is the valid representation of an empty registry.
-    tmp = registry_path.with_suffix(registry_path.suffix + ".tmp")
+    tmp = registry_path.with_suffix(registry_path.suffix + f".{os.getpid()}.tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         for r in records:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")

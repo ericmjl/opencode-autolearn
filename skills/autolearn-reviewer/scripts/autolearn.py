@@ -617,7 +617,7 @@ def cmd_init(args):
     if not USER_FILE.exists():
         write_md(USER_FILE, "# User Profile\n\n<!-- Managed by autolearn. -->\n\n")
     if not CONFIG_FILE.exists():
-        write_md(CONFIG_FILE, "review_threshold: 10\nsession_review_on_idle: true\nmax_conversation_buffer: 50\ncurator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\nescalation_threshold: 3\n")
+        write_md(CONFIG_FILE, "review_threshold: 5\nsession_review_on_idle: true\nmax_conversation_buffer: 50\ncurator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\nescalation_threshold: 3\n")
     print(f"Initialized autolearn store at {DATA_HOME}")
 
 
@@ -637,7 +637,7 @@ def refresh_context():
         reg = memory_registry()
         md = composer.compose(reg, set())
         out = ACTIVE_PERSONA_DIR / "memory.context.md"
-        tmp = out.with_suffix(out.suffix + ".tmp")
+        tmp = out.with_suffix(out.suffix + f".{os.getpid()}.tmp")
         tmp.write_text(md, encoding="utf-8")
         os.replace(tmp, out)
     except Exception:
@@ -770,7 +770,7 @@ def cmd_memory_compose(args):
     ctx = composer.tokens(args.context) if getattr(args, "context", None) else set()
     md = composer.compose(reg, ctx)
     out = ACTIVE_PERSONA_DIR / "memory.context.md"
-    tmp = out.with_suffix(out.suffix + ".tmp")
+    tmp = out.with_suffix(out.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(md, encoding="utf-8")
     os.replace(tmp, out)
     n = max(0, md.count("\n- "))
@@ -1222,6 +1222,7 @@ def cmd_search_init(args):
         sconn.execute("DELETE FROM session_text_content")
         sconn.execute("DELETE FROM indexed_session")
         sconn.execute("DELETE FROM index_state WHERE key = 'last_part_time'")
+        sconn.execute("DELETE FROM index_state WHERE key = 'last_v2_message_time'")
         sconn.commit()
         print("Cleared existing index for full rebuild...")
 
@@ -1230,15 +1231,31 @@ def cmd_search_init(args):
     ).fetchone()
     last_mark = int(last_mark_row["value"]) if last_mark_row else 0
 
+    last_v2_mark_row = sconn.execute(
+        "SELECT value FROM index_state WHERE key = 'last_v2_message_time'"
+    ).fetchone()
+    last_v2_mark = int(last_v2_mark_row["value"]) if last_v2_mark_row else 0
+
     session_cache: dict[str, dict] = {}
 
     def get_session(session_id: str) -> dict:
         if session_id in session_cache:
             return session_cache[session_id]
-        row = db_conn.execute(
-            "SELECT id, title, project_id, time_created FROM session WHERE id = ?",
-            [session_id],
-        ).fetchone()
+        row = None
+        # v2 first: for ids present in both stores, session_v2 carries the
+        # fresher title. The v2 table may be absent on v1-only installs.
+        try:
+            row = db_conn.execute(
+                "SELECT id, title, project_id, time_created FROM session_v2 WHERE id = ?",
+                [session_id],
+            ).fetchone()
+        except sqlite3.OperationalError:
+            row = None
+        if row is None:
+            row = db_conn.execute(
+                "SELECT id, title, project_id, time_created FROM session WHERE id = ?",
+                [session_id],
+            ).fetchone()
         if row:
             project_row = db_conn.execute(
                 "SELECT name FROM project WHERE id = ?", [row["project_id"]]
@@ -1263,7 +1280,7 @@ def cmd_search_init(args):
         ORDER BY p.time_created ASC
         """,
         [last_mark],
-    ).fetchall()
+    )
 
     count = 0
     max_time = last_mark
@@ -1307,15 +1324,93 @@ def cmd_search_init(args):
             [str(max_time)],
         )
 
+    # OpenCode v2 (beta) sessions: message text lives in session_message.data
+    # (JSON with a content array); metadata lives in session_v2. Tables are
+    # absent on v1-only installs, in which case this loop is skipped.
+    # Messages mirrored into the v1 `message` table are already indexed by
+    # the v1 loop above — skip them here to avoid double-indexing.
+    v2_count = 0
+    v2_max_time = last_v2_mark
+    has_v1_message_table = False
+    try:
+        has_v1_message_table = bool(
+            db_conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'message'"
+            ).fetchone()
+        )
+    except sqlite3.OperationalError:
+        pass
+
+    v2_sql = """
+        SELECT sm.id AS msg_id, sm.session_id, sm.type AS role,
+               sm.time_created, sm.data AS msg_data
+        FROM session_message sm
+        WHERE sm.time_created > ?
+    """
+    if has_v1_message_table:
+        v2_sql += "  AND NOT EXISTS (SELECT 1 FROM message m WHERE m.id = sm.id)\n"
+    v2_sql += "        ORDER BY sm.time_created ASC"
+    try:
+        v2_cursor = db_conn.execute(v2_sql, [last_v2_mark])
+    except sqlite3.OperationalError:
+        v2_cursor = None
+
+    for row in (v2_cursor or []):
+        if row["role"] not in ("user", "assistant"):
+            continue
+        try:
+            mdata = json.loads(row["msg_data"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(mdata, dict):
+            continue
+        parts = mdata.get("content")
+        if not isinstance(parts, list):
+            continue
+
+        session_id = row["session_id"]
+        session = get_session(session_id)
+
+        for i, part in enumerate(parts):
+            if not isinstance(part, dict) or part.get("type") != "text":
+                continue
+            text = part.get("text", "")
+            if not text or not text.strip():
+                continue
+
+            sconn.execute(
+                "INSERT INTO session_text_content (session_id, message_id, role, text, project, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                [session_id, row["msg_id"], row["role"], text, session.get("project", "") or "", row["time_created"]],
+            )
+            sconn.execute(
+                "INSERT OR REPLACE INTO indexed_session (session_id, title, project, message_count, time_created, time_indexed) VALUES (?, ?, ?, COALESCE((SELECT message_count FROM indexed_session WHERE session_id = ?), 0) + 1, ?, ?)",
+                [session_id, session["title"], session["project"], session_id, session["time_created"], int(datetime.now().timestamp() * 1000)],
+            )
+            v2_count += 1
+
+        if row["time_created"] > v2_max_time:
+            v2_max_time = row["time_created"]
+
+    if v2_max_time > last_v2_mark:
+        sconn.execute(
+            "INSERT OR REPLACE INTO index_state (key, value) VALUES ('last_v2_message_time', ?)",
+            [str(v2_max_time)],
+        )
+
     sconn.execute("INSERT INTO session_text(session_text) VALUES ('rebuild')")
     sconn.commit()
     sconn.close()
     db_conn.close()
 
-    if count == 0:
+    if count == 0 and v2_count == 0:
         print("Index is up to date. No new messages to index.")
     else:
-        print(f"Indexed {count} new text parts (up to {iso_from_unix_ms(max_time)})")
+        parts_summary = []
+        if count:
+            parts_summary.append(f"{count} v1 text parts (up to {iso_from_unix_ms(max_time)})")
+        if v2_count:
+            parts_summary.append(f"{v2_count} v2 text parts (up to {iso_from_unix_ms(v2_max_time)})")
+        print(f"Indexed {' + '.join(parts_summary)}")
 
 
 def cmd_search_query(args):
@@ -1475,15 +1570,23 @@ def cmd_search_status(args):
         "SELECT value FROM index_state WHERE key = 'last_part_time'"
     ).fetchone()
     last_mark = int(last_mark_row["value"]) if last_mark_row else 0
+    last_v2_row = sconn.execute(
+        "SELECT value FROM index_state WHERE key = 'last_v2_message_time'"
+    ).fetchone()
+    last_v2_mark = int(last_v2_row["value"]) if last_v2_row else 0
     db_size = SEARCH_DB.stat().st_size if SEARCH_DB.exists() else 0
 
     print("Index status:")
     print(f"  Sessions indexed: {session_count}")
     print(f"  Text parts indexed: {text_count}")
     if last_mark:
-        print(f"  Last indexed part: {iso_from_unix_ms(last_mark)}")
+        print(f"  Last indexed part (v1): {iso_from_unix_ms(last_mark)}")
     else:
-        print(f"  Last indexed part: never")
+        print(f"  Last indexed part (v1): never")
+    if last_v2_mark:
+        print(f"  Last indexed part (v2): {iso_from_unix_ms(last_v2_mark)}")
+    else:
+        print(f"  Last indexed part (v2): never")
     print(f"  Database size: {db_size / (1024 * 1024):.1f} MB")
     print(f"  Database path: {SEARCH_DB}")
     sconn.close()
@@ -1580,7 +1683,7 @@ def cmd_persona_create(args):
     (persona_path / "memory.md").write_text(f"# Autolearn Memory ({name})\n\n<!-- Managed by autolearn. -->\n\n")
     (persona_path / "user-profile.md").write_text("# User Profile\n\n<!-- Managed by autolearn. -->\n\n")
     (persona_path / "config.yaml").write_text(
-        f"review_threshold: 10\nsession_review_on_idle: true\nmax_conversation_buffer: 50\n"
+        f"review_threshold: 5\nsession_review_on_idle: true\nmax_conversation_buffer: 50\n"
         f"curator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\nescalation_threshold: 3\n"
     )
     print(f"Created persona: {name} at {persona_path}")

@@ -221,7 +221,7 @@ def _load(path: Path) -> list[dict]:
 
 
 def _save(path: Path, cands: list[dict]) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(cands, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 

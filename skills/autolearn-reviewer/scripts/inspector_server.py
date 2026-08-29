@@ -77,7 +77,7 @@ def load_candidates(pdir: Path, status: str | None) -> list[dict]:
 
 def save_candidates(pdir: Path, candidates: list[dict]) -> None:
     path = pdir / "candidates.jsonl"
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         for c in candidates:
             fh.write(json.dumps(c, ensure_ascii=False) + "\n")
