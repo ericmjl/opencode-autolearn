@@ -1,0 +1,19 @@
+docs/designs/conversation-monitoring/turn-counting-EARS.md
+  s_20d481054271cc::t_58f5e69cec4d14 29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "0ce55e3063efd0e9cdbd552e2eb5e455749bc576",
+  "prompts": {},
+  "sessions": {
+    "s_20d481054271cc": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fb16b389dffeDxAlptyc5RHQMi",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "Eric Ma <ericmajinglong@gmail.com>"
+    }
+  }
+}
