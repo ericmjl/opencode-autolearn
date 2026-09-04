@@ -1,0 +1,18 @@
+plugin/autolearn-core.mjs
+  h_923f9eef54c2c1 56-57,93,185-243,267-272,274,440-522,533-544
+plugin/autolearn-v2.js
+  h_923f9eef54c2c1 48,242-244,249-251,268-269
+plugin/autolearn.js
+  h_923f9eef54c2c1 59-62,79-81,85,94-96,242-244
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "125d79df6863c74e42f06c708a82c8ad7d563162",
+  "prompts": {},
+  "humans": {
+    "h_923f9eef54c2c1": {
+      "author": "Eric Ma <ericmajinglong@gmail.com>"
+    }
+  }
+}
