@@ -4,12 +4,13 @@
 
 ## Turn Counting
 
-- [x] **CM-TC-001**: The system shall increment the turn counter once for each finalized assistant message.
+- [x] **CM-TC-001**: The system shall increment the assistant-message counter once for each finalized assistant message. *(Observability counter only as of 2026-09-04: the review threshold unit is user messages — CM-TC-007.)*
 - [x] **CM-TC-002**: When a message part delta arrives, the system shall accumulate the delta text into the message's text buffer.
 - [x] **CM-TC-003**: When a message is finalized (message.updated event), the system shall determine the role and buffer the message content.
 - [x] **CM-TC-004**: If the message role is "user", the system shall buffer the message content (truncated to 1000 characters) without incrementing the turn counter.
-- [x] **CM-TC-005**: If the message role is "assistant", the system shall buffer the message content (truncated to 2000 characters) and increment the turn counter.
+- [x] **CM-TC-005**: If the message role is "assistant", the system shall buffer the message content (truncated to 2000 characters) and increment the assistant-message counter.
 - [x] **CM-TC-006**: The system shall redact secrets (API keys, tokens, passwords) from all buffered message content before storing.
+- [x] **CM-TC-007** (2026-09-04): The system shall increment a user-message counter once per buffered user message (v2: `session.inbox.enqueued`; v1: user-role `message.updated`). The review threshold counts USER messages (exchanges), not assistant turns — one user message can produce many assistant turns in tool-heavy sessions, so turn-based thresholds fire mid-exchange on machine activity rather than interaction volume.
 
 ## Buffer Management
 

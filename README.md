@@ -121,7 +121,7 @@ Behavioral differences worth knowing:
 Config lives at `~/.autolearn/personas/default/config.yaml`:
 
 ```yaml
-review_threshold: 5          # assistant turns between reviews
+review_threshold: 5          # user messages (exchanges) between reviews
 session_review_on_idle: true  # spawn review on session idle
 max_conversation_buffer: 50   # max messages in buffer
 curator_interval_days: 7      # how often to run curator

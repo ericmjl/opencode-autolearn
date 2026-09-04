@@ -4,8 +4,8 @@
 
 ## Threshold Triggering
 
-- [x] **CM-RS-001**: When the turn counter minus the last review turn reaches `review_threshold` (default 5), the system shall trigger a review spawn.
-- [x] **CM-RS-002**: After triggering a threshold-based review, the system shall record the current turn count as `lastReviewTurn`.
+- [x] **CM-RS-001**: When the user-message counter minus the last review user-message count reaches `review_threshold` (default 5), the system shall trigger a review spawn. *(Unit changed 2026-09-04: counts USER messages/exchanges, not assistant turns — see CM-TC-007. The check runs at the assistant-completion exchange boundary so reviews cover complete exchanges.)*
+- [x] **CM-RS-002**: After triggering a threshold-based review, the system shall record the current user-message count as `lastReviewUserMsg`.
 
 ## Spawn Execution
 
