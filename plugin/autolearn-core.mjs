@@ -53,6 +53,8 @@ export const AUTOLEARN_CLI = join(homedir(), ".agents", "skills", "autolearn-rev
 export const THRESHOLD_DEFAULT = 5
 export const STALE_DAYS_DEFAULT = 30
 export const IDLE_COOLDOWN_MS = 300000
+export const MIN_INTERVAL_DEFAULT_MS = 1800000 // 30 min between reviews, global
+export const MAX_REVIEWS_PER_DAY_DEFAULT = 24 // hard ceiling across all projects
 export const REVIEW_HEADING = "# Autolearn Review"
 export const DEBUG = process.env.AUTOLEARN_DEBUG === "1"
 export const DBG_FILE = join(AL_HOME, "debug.log")
@@ -88,7 +90,7 @@ export function ensureStore() {
     writeFileSync(USER_FILE, "# User Profile\n\n<!-- Managed by autolearn. -->\n\n")
   }
   if (!existsSync(CONFIG_FILE)) {
-    writeFileSync(CONFIG_FILE, `review_threshold: ${THRESHOLD_DEFAULT}\nsession_review_on_idle: true\nmax_conversation_buffer: 50\ncurator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\n`)
+    writeFileSync(CONFIG_FILE, `review_threshold: ${THRESHOLD_DEFAULT}\nsession_review_on_idle: true\nmax_conversation_buffer: 50\nmin_interval_ms: ${MIN_INTERVAL_DEFAULT_MS}\ncurator_interval_days: 7\nstale_after_days: 30\narchive_after_days: 90\n`)
   }
   ensureWrapper()
 }
@@ -180,7 +182,65 @@ const WRAPPER_CONTENT = `#!/bin/sh
 # Autolearn review runner - runs an opencode review, deletes the session,
 # then pushes the updated store via sync (if configured).
 # Works with OpenCode v1 (opencode) and v2 beta (opencode2).
-# Args: passed directly to \`<binary> run --format json\`
+# Args: passed directly to \`<binary> run --format json\` ($1 = review md path)
+#
+# Wrapper-side throttle (defense in depth): plugin instances already in
+# memory predate the in-plugin throttle and keep calling this script, so
+# gate HERE as well. Three gates, keyed on wrapper-owned state that is
+# independent of the plugin's .last_review_lock (so the two layers never
+# cancel each other out):
+#   1. one review executing at a time (atomic mkdir claim)
+#   2. min_interval_ms between review STARTS (default 30m, config-overridable)
+#   3. an identical conversation section never runs twice
+# ensureWrapper() rewrites this file on every plugin load, so a manual triage
+# edit to the wrapper no longer silently reverts (2026-09-04: the un-gated
+# wrapper was restored by a fresh plugin load mid-incident and the fleet
+# respawned).
+AL="\${AUTOLEARN_HOME:-\$HOME/.autolearn}"
+GATE="\$AL/.review_gate"
+LOCK="\$AL/.last_wrapper_review"
+MIN_INTERVAL=1800000
+CFG="\$AL/personas/default/config.yaml"
+if [ -f "\$CFG" ]; then
+  MI=\$(sed -n 's/^min_interval_ms:[[:space:]]*//p' "\$CFG" | head -1 | tr -d '[:space:]')
+  case "\$MI" in ''|*[!0-9]*) ;; *) MIN_INTERVAL="\$MI" ;; esac
+fi
+NOW=\$(date +%s)
+# Gate 3 first (cheap, no state change): identical conversation → skip.
+# NOTE: the plugin passes the review markdown CONTENT as \$1 (it becomes the
+# prompt), not a file path.
+CONV=\$(printf '%s' "\$1" | sed -n '/## Conversation/,\$p')
+HASH=""
+if [ -n "\$CONV" ]; then
+  HASH=\$(printf '%s' "\$CONV" | md5 -q 2>/dev/null || printf '%s' "\$CONV" | md5sum | cut -d' ' -f1)
+  OLDHASH=\$(cut -d: -f2 "\$LOCK" 2>/dev/null)
+  if [ -n "\$HASH" ] && [ -n "\$OLDHASH" ] && [ "\$HASH" = "\$OLDHASH" ]; then
+    exit 0
+  fi
+fi
+# Gate 2: start-to-start spacing.
+LAST=\$(cut -d: -f1 "\$LOCK" 2>/dev/null)
+case "\$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
+if [ \$(( (NOW - LAST) * 1000 )) -lt "\$MIN_INTERVAL" ]; then
+  exit 0
+fi
+# Gate 1: atomic claim. Losers exit; a gate older than 15 min is stale
+# (crashed run) and gets reclaimed.
+if ! mkdir "\$GATE" 2>/dev/null; then
+  GAGE=\$(cat "\$GATE/ts" 2>/dev/null || echo 0)
+  case "\$GAGE" in ''|*[!0-9]*) GAGE=0 ;; esac
+  if [ \$((NOW - GAGE)) -gt 900 ]; then
+    rm -rf "\$GATE"
+    mkdir "\$GATE" 2>/dev/null || exit 0
+  else
+    exit 0
+  fi
+fi
+printf '%s\n' "\$NOW" > "\$GATE/ts" 2>/dev/null
+trap 'rm -rf "\$GATE" 2>/dev/null' EXIT
+# Record start BEFORE running so a killed review still consumes the interval
+# (fail-safe: a broken binary must not cause an endless retry loop).
+printf '%s:%s\\n' "\$NOW" "\$HASH" > "\$LOCK" 2>/dev/null
 OC="\${AUTOLEARN_OPENCODE_BIN:-}"
 if [ -z "\$OC" ]; then
   if command -v opencode2 >/dev/null 2>&1; then OC=opencode2; else OC=opencode; fi
@@ -204,8 +264,14 @@ fi
 
 function ensureWrapper() {
   try {
+    // The wrapper is the last line of defense for plugin instances still in
+    // memory from before an upgrade (their OLD ensureWrapper would otherwise
+    // restore an un-gated wrapper — observed 2026-09-04). Keeping the file
+    // read-only between updates makes stale instances' writes fail silently
+    // while fresh code chmods, writes, and re-locks it.
+    try { chmodSync(WRAPPER_SCRIPT, 0o644) } catch {}
     writeFileSync(WRAPPER_SCRIPT, WRAPPER_CONTENT)
-    chmodSync(WRAPPER_SCRIPT, 0o755)
+    chmodSync(WRAPPER_SCRIPT, 0o544) // r-x: executable, NOT writable
   } catch (err) {
     dbg("ensureWrapper failed:", err.message)
   }
@@ -372,6 +438,89 @@ export function cleanStaleReviews(config) {
 }
 
 /**
+ * Cross-process review throttle: multiple plugin instances (one per OpenCode
+ * project/directory) share one LLM provider budget, so a global lock file
+ * gates spawns across all of them.
+ *
+ * Returns true when a spawn is allowed; side effect: bumps the last-review
+ * timestamp so the NEXT allowed spawn is delayed by min_interval_ms.
+ * Three layers (checked in order, cheapest first):
+ *   1. Content (all projects): a hash of the review's Conversation section;
+ *      the identical conversation snapshot (e.g. the same idle moment seen
+ *      by every instance of the same event stream) never reviews twice.
+ *   2. Global spacing (all projects): min_interval_ms between any two
+ *      reviews (default 30 min). Prevents the N-project parallel burst.
+ *   3. Daily cap (all projects): max_reviews_per_day reviews per calendar
+ *      day, counted from review file timestamps. Default 24. Hard ceiling
+ *      on provider spend even if other gates misbehave.
+ */
+export const THROTTLE_FILE = join(AL_HOME, ".last_review_lock")
+
+// FNV-1a over the review text — fast, no deps, stable across runtimes.
+export function contentHash(str) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16)
+}
+
+export function throttleCheck(reviewMd) {
+  // Hash the CONVERSATION section only, not the whole md: the Context header
+  // (project name, timestamp) varies between plugin instances that observed
+  // the same conversation, and those variants must still dedupe — that is
+  // exactly the multi-project burst pattern this throttle exists to stop.
+  const convIdx = reviewMd.indexOf("## Conversation")
+  const dedupeKey = convIdx >= 0 ? reviewMd.slice(convIdx) : reviewMd
+
+  let lastMs = 0
+  let lastHash = ""
+  try {
+    const raw = readFileSync(THROTTLE_FILE, "utf-8")
+    const [ms, hash] = raw.trim().split(":")
+    lastMs = parseInt(ms, 10) || 0
+    lastHash = hash || ""
+  } catch {}
+
+  if (contentHash(dedupeKey) === lastHash) {
+    dbg("THROTTLED: identical review content already spawned")
+    return false
+  }
+
+  const config = parseConfig()
+  const minInterval = config.min_interval_ms ?? MIN_INTERVAL_DEFAULT_MS
+  const now = Date.now()
+  const gap = now - lastMs
+  if (gap < minInterval) {
+    dbg("THROTTLED: global min_interval_ms", gap, "<", minInterval)
+    return false
+  }
+
+  // Daily cap across all projects: reviews spawned today (file timestamps)
+  // must not exceed max_reviews_per_day. Bounds worst-case provider spend
+  // even if every other gate fails.
+  const dailyCap = config.max_reviews_per_day ?? MAX_REVIEWS_PER_DAY_DEFAULT
+  if (dailyCap > 0) {
+    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0)
+    let today = 0
+    try {
+      for (const f of readdirSync(REVIEWS_DIR)) {
+        const m = f.match(/review-(?:exit-)?(\d+)\.md/)
+        if (m && parseInt(m[1], 10) >= dayStart.getTime()) today++
+      }
+    } catch {}
+    if (today >= dailyCap) {
+      dbg("THROTTLED: daily cap reached", today, ">=", dailyCap)
+      return false
+    }
+  }
+
+  try { writeFileSync(THROTTLE_FILE, `${now}:${contentHash(dedupeKey)}`) } catch {}
+  return true
+}
+
+/**
  * Spawn a review subprocess via the wrapper script.
  * `messageCount`, `project`, and `trigger` are recorded in the observation
  * log (spec CM-RS-013); pass `log: false` to skip observation logging
@@ -381,6 +530,18 @@ export function cleanStaleReviews(config) {
  */
 // @spec CM-RS-007..CM-RS-013
 export function runReviewSubprocess({ reviewMd, filePrefix = "review", title, cwd, env, messageCount, project, trigger, log = true }) {
+  // Cross-process throttle first: identical content never reviews twice, any
+  // two reviews are separated by min_interval_ms (default 30 min), and a
+  // daily cap bounds total provider spend.
+  // @spec CM-RS-020
+  if (!throttleCheck(reviewMd)) {
+    dbg("REVIEW SUPPRESSED by throttle", { project, trigger })
+    if (log) {
+      logObs({ type: "review_throttled", project: project || "unknown", trigger: trigger || "unknown" })
+    }
+    return { ok: false, reviewFile: null, reviewMd, throttled: true }
+  }
+
   // @spec CM-RS-007
   const reviewFile = join(REVIEWS_DIR, `${filePrefix}-${Date.now()}.md`)
   writeFileSync(reviewFile, reviewMd)

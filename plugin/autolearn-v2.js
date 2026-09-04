@@ -45,7 +45,7 @@ export default {
     }
 
     core.ensureStore()
-    const config = core.parseConfig()
+    let config = core.parseConfig()
     const directory = ctx?.location?.directory || ctx?.directory || process.cwd()
     const projectName = () => String(directory).split("/").pop() || "unknown"
 
@@ -239,11 +239,16 @@ export default {
           trimBuffer(st)
           core.dbg("ASSISTANT TURN (v2)", sid, st.turnCount, content.length, "chars")
 
-          // @spec CM-RS-001, CM-RS-002
+          // @spec CM-RS-001, CM-RS-002 (v2: threshold counts turns; the
+          // per-session spacing comes from min_interval_ms via the global
+          // throttle, so 8 project instances don't fire simultaneously)
           const threshold = config.review_threshold || core.THRESHOLD_DEFAULT
           if (st.turnCount - st.lastReviewTurn >= threshold) {
             st.lastReviewTurn = st.turnCount
             core.dbg("TRIGGERING REVIEW (v2) at turn", st.turnCount)
+            // Re-read config at trigger time: OpenCode runs for weeks, and a
+            // startup-cached config makes live triage edits invisible.
+            config = core.parseConfig()
             spawnReview(st, "threshold").catch(e => {
               core.dbg("SPAWN REVIEW UNHANDLED (v2)", e.message)
               reviewInProgress = false
@@ -260,6 +265,8 @@ export default {
           if (!sid) break
           const st = state(sid)
           if (st.isReviewer) break
+          // Re-read config at idle time too (same rationale as the threshold path).
+          config = core.parseConfig()
           maybeIdleReview(st)
           break
         }

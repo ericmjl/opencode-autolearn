@@ -29,7 +29,6 @@ export const AutolearnPlugin = async (ctx) => {
 
   const { client, directory, worktree } = ctx
   core.ensureStore()
-  const config = core.parseConfig()
 
   // @spec CM-GUARD-002
   const isPrimary = !globalThis[GUARD]
@@ -57,6 +56,10 @@ export const AutolearnPlugin = async (ctx) => {
   core.injectInstructions()
   core.composeContext()
 
+  // `config` must be mutable — re-read at every trigger point so live edits
+  // to config.yaml take effect without a plugin reload.
+  let config = core.parseConfig()
+
   // @spec CM-RS-003, CM-RS-004, CM-RS-005
   async function spawnReview() {
     if (buffer.length === 0 || reviewInProgress) return
@@ -73,10 +76,13 @@ export const AutolearnPlugin = async (ctx) => {
 
     core.dbg("SPAWN REVIEW", captured.length, "messages")
 
+    // Re-read config at trigger time: OpenCode runs for weeks, so a
+    // startup-cached config makes live triage edits invisible.
+    config = core.parseConfig()
     const reviewMd = core.formatReview(captured, { project: projectName(), trigger: "threshold" })
 
     try {
-      core.runReviewSubprocess({
+      const result = core.runReviewSubprocess({
         reviewMd,
         title: "autolearn review",
         cwd: reviewCwd(),
@@ -85,6 +91,9 @@ export const AutolearnPlugin = async (ctx) => {
         project: projectName(),
         trigger: "threshold",
       })
+      if (result?.throttled) {
+        core.dbg("REVIEW SUPPRESSED by throttle (v1)", captured.length, "messages")
+      }
 
       // @spec CM-RS-014
       core.cleanStaleReviews(config)
@@ -230,6 +239,9 @@ export const AutolearnPlugin = async (ctx) => {
           // @spec CM-IDLE-001, CM-IDLE-002, CM-IDLE-003, CM-IDLE-004
           case "session.idle": {
             const now = Date.now()
+            // Re-read config at idle time: OpenCode runs for weeks, so a
+            // startup-cached config makes live triage edits invisible.
+            config = core.parseConfig()
             const cooldown = config.idle_cooldown_ms || core.IDLE_COOLDOWN_MS
             core.dbg("SESSION IDLE buffer=", buffer.length, "reviewInProgress=", reviewInProgress, "cooldownRemaining=", Math.max(0, cooldown - (now - lastIdleReview)))
             if (
