@@ -61,7 +61,7 @@ export const AutolearnPlugin = async (ctx) => {
   let config = core.parseConfig()
 
   // @spec CM-RS-003, CM-RS-004, CM-RS-005
-  async function spawnReview() {
+  async function spawnReview(trigger) {
     if (buffer.length === 0 || reviewInProgress) return
     const reviewText = buffer.map(m => m.content).join(" ")
     if (reviewText.includes(core.REVIEW_HEADING)) {
@@ -69,31 +69,32 @@ export const AutolearnPlugin = async (ctx) => {
       buffer = []
       return
     }
+    // Speculate on the review content BEFORE clearing the buffer: if the
+    // throttle denies the spawn (busy window / duplicate), the buffer stays
+    // intact and this content rides the NEXT trigger instead of being lost.
+    const reviewMd = core.formatReview(buffer, { project: projectName(), trigger })
+    if (!core.throttleCheck(reviewMd)) {
+      core.dbg("REVIEW QUEUED by throttle (v1)", buffer.length, "messages, trigger", trigger)
+      return
+    }
+
     reviewInProgress = true
     // @spec CM-BUF-003
     const captured = [...buffer]
     buffer = []
 
-    core.dbg("SPAWN REVIEW", captured.length, "messages")
-
-    // Re-read config at trigger time: OpenCode runs for weeks, so a
-    // startup-cached config makes live triage edits invisible.
-    config = core.parseConfig()
-    const reviewMd = core.formatReview(captured, { project: projectName(), trigger: "threshold" })
+    core.dbg("SPAWN REVIEW", captured.length, "messages, trigger", trigger)
 
     try {
-      const result = core.runReviewSubprocess({
+      core.runReviewSubprocess({
         reviewMd,
         title: "autolearn review",
         cwd: reviewCwd(),
         env: { AUTOLEARN_OPENCODE_BIN: "opencode" },
         messageCount: captured.length,
         project: projectName(),
-        trigger: "threshold",
+        trigger,
       })
-      if (result?.throttled) {
-        core.dbg("REVIEW SUPPRESSED by throttle (v1)", captured.length, "messages")
-      }
 
       // @spec CM-RS-014
       core.cleanStaleReviews(config)
@@ -192,7 +193,7 @@ export const AutolearnPlugin = async (ctx) => {
               if (turnCount - lastReviewTurn >= threshold) {
                 lastReviewTurn = turnCount
                 core.dbg("TRIGGERING REVIEW at turn", turnCount)
-                spawnReview().catch(e => {
+                spawnReview("threshold").catch(e => {
                   core.dbg("SPAWN REVIEW UNHANDLED", e.message)
                   reviewInProgress = false
                 })
@@ -251,7 +252,7 @@ export const AutolearnPlugin = async (ctx) => {
               now - lastIdleReview >= cooldown
             ) {
               lastIdleReview = now
-              spawnReview().catch(e => {
+              spawnReview("idle").catch(e => {
                 core.dbg("IDLE REVIEW UNHANDLED", e.message)
                 reviewInProgress = false
               })

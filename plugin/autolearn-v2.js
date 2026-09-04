@@ -99,14 +99,21 @@ export default {
         st.buffer = []
         return
       }
+      // Speculate on the review content BEFORE clearing the buffer: if the
+      // throttle denies the spawn (busy window / duplicate), the buffer stays
+      // intact and this content rides the NEXT trigger instead of being lost.
+      const reviewMd = core.formatReview(st.buffer, { project: projectName(), trigger })
+      if (!core.throttleCheck(reviewMd)) {
+        core.dbg("REVIEW QUEUED by throttle (v2)", st.buffer.length, "messages, trigger", trigger)
+        return
+      }
+
       reviewInProgress = true
       // @spec CM-BUF-003
       const captured = [...st.buffer]
       st.buffer = []
 
       core.dbg("SPAWN REVIEW (v2)", captured.length, "messages, trigger", trigger)
-
-      const reviewMd = core.formatReview(captured, { project: projectName(), trigger })
 
       try {
         core.runReviewSubprocess({
