@@ -1,0 +1,24 @@
+README.md
+  h_923f9eef54c2c1 124
+docs/designs/conversation-monitoring/review-spawning-EARS.md
+  h_923f9eef54c2c1 7-8
+docs/designs/conversation-monitoring/turn-counting-EARS.md
+  h_923f9eef54c2c1 7,11,13
+plugin/autolearn-core.mjs
+  h_923f9eef54c2c1 53
+plugin/autolearn-v2.js
+  h_923f9eef54c2c1 75-76,203,231-232,248,250-255,257-259
+plugin/autolearn.js
+  h_923f9eef54c2c1 44-45,187-189,195-197,199-201,212-213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "832ea90b697f228f03bcfef3871a3768dadb52e9",
+  "prompts": {},
+  "humans": {
+    "h_923f9eef54c2c1": {
+      "author": "Eric Ma <ericmajinglong@gmail.com>"
+    }
+  }
+}
