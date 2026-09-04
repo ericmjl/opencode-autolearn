@@ -72,8 +72,8 @@ export default {
       }
       st = {
         buffer: [],
-        turnCount: 0,
-        lastReviewTurn: 0,
+        userMsgCount: 0,
+        lastReviewUserMsg: 0,
         lastIdleReview: 0,
         isReviewer: false,
         lastInboxID: null,
@@ -200,6 +200,7 @@ export default {
           const content = core.redact(core.truncate(text, 1000))
           st.buffer.push({ role: "user", content, timestamp: new Date().toISOString() })
           trimBuffer(st)
+          st.userMsgCount++
           core.dbg("USER MESSAGE (v2)", sid, content.length, "chars")
           break
         }
@@ -227,7 +228,8 @@ export default {
           break
         }
 
-        // @spec CM-TC-005, CM-TC-001 (v2: one turn per assistant message).
+        // @spec CM-TC-005 (v2: assistant text buffered at step end; the
+        // threshold counter is USER messages — see CM-TC-004/CM-RS-001).
         // Dedupe is the assistantTexts entry itself: a step that produced no
         // text (tool-only steps of the same message) finds nothing to count,
         // and consuming the entry prevents recounting on later steps.
@@ -241,18 +243,20 @@ export default {
           assistantTexts.delete(data.assistantMessageID)
 
           const content = core.redact(core.truncate(text, 2000))
-          st.turnCount++
           st.buffer.push({ role: "assistant", content, timestamp: new Date().toISOString() })
           trimBuffer(st)
-          core.dbg("ASSISTANT TURN (v2)", sid, st.turnCount, content.length, "chars")
+          core.dbg("ASSISTANT TURN (v2)", sid, content.length, "chars")
 
-          // @spec CM-RS-001, CM-RS-002 (v2: threshold counts turns; the
-          // per-session spacing comes from min_interval_ms via the global
-          // throttle, so 8 project instances don't fire simultaneously)
+          // @spec CM-RS-001, CM-RS-002 (v2: the threshold counts USER
+          // messages; the check runs here because assistant completion is
+          // the exchange boundary — the review always covers complete
+          // exchanges. Per-session spacing comes from min_interval_ms via
+          // the global throttle, so 8 project instances don't fire
+          // simultaneously.)
           const threshold = config.review_threshold || core.THRESHOLD_DEFAULT
-          if (st.turnCount - st.lastReviewTurn >= threshold) {
-            st.lastReviewTurn = st.turnCount
-            core.dbg("TRIGGERING REVIEW (v2) at turn", st.turnCount)
+          if (st.userMsgCount - st.lastReviewUserMsg >= threshold) {
+            st.lastReviewUserMsg = st.userMsgCount
+            core.dbg("TRIGGERING REVIEW (v2) after user msg", st.userMsgCount)
             // Re-read config at trigger time: OpenCode runs for weeks, and a
             // startup-cached config makes live triage edits invisible.
             config = core.parseConfig()

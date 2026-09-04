@@ -41,7 +41,8 @@ export const AutolearnPlugin = async (ctx) => {
   core.dbg("PLUGIN LOADED (v1)", { isPrimary, hasClient: !!client, hasSession: !!(client?.session), directory })
 
   let turnCount = 0
-  let lastReviewTurn = 0
+  let userMsgCount = 0
+  let lastReviewUserMsg = 0
   let lastIdleReview = 0
   let buffer = []
   let currentSessionId = null
@@ -183,16 +184,21 @@ export const AutolearnPlugin = async (ctx) => {
             if (text && role === "assistant") {
               // @spec CM-TC-005, CM-TC-001
               const content = core.redact(core.truncate(text, 2000))
+              // @spec CM-TC-005, CM-TC-001 (assistant text buffered; kept
+              // as an observability counter only — the threshold unit is
+              // USER messages)
               turnCount++
               // @spec CM-BUF-001
               buffer.push({ role: "assistant", content, timestamp: new Date().toISOString() })
               core.dbg("ASSISTANT TURN", turnCount, content.length, "chars")
 
-              // @spec CM-RS-001, CM-RS-002
+              // @spec CM-RS-001, CM-RS-002 (threshold counts USER messages;
+              // checked at the assistant-completion exchange boundary so the
+              // review covers complete exchanges)
               const threshold = config.review_threshold || core.THRESHOLD_DEFAULT
-              if (turnCount - lastReviewTurn >= threshold) {
-                lastReviewTurn = turnCount
-                core.dbg("TRIGGERING REVIEW at turn", turnCount)
+              if (userMsgCount - lastReviewUserMsg >= threshold) {
+                lastReviewUserMsg = userMsgCount
+                core.dbg("TRIGGERING REVIEW after user msg", userMsgCount)
                 spawnReview("threshold").catch(e => {
                   core.dbg("SPAWN REVIEW UNHANDLED", e.message)
                   reviewInProgress = false
@@ -203,6 +209,8 @@ export const AutolearnPlugin = async (ctx) => {
               const content = core.redact(core.truncate(text, 1000))
               // @spec CM-BUF-001
               buffer.push({ role: "user", content, timestamp: new Date().toISOString() })
+              // @spec CM-TC-007 (v1: the threshold unit is USER messages)
+              userMsgCount++
               core.dbg("USER MESSAGE", content.length, "chars")
             }
 
