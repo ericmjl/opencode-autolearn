@@ -53,8 +53,8 @@ export const AUTOLEARN_CLI = join(homedir(), ".agents", "skills", "autolearn-rev
 export const THRESHOLD_DEFAULT = 5
 export const STALE_DAYS_DEFAULT = 30
 export const IDLE_COOLDOWN_MS = 300000
-export const MIN_INTERVAL_DEFAULT_MS = 1800000 // 30 min between reviews, global
-export const MAX_REVIEWS_PER_DAY_DEFAULT = 24 // hard ceiling across all projects
+export const MIN_INTERVAL_DEFAULT_MS = 180000 // 3 min between review starts, global (serializes bursts; dedupe handles same-content)
+export const MAX_REVIEWS_PER_DAY_DEFAULT = 60 // hard ceiling across all projects (~2.5/hr sustained)
 export const REVIEW_HEADING = "# Autolearn Review"
 export const DEBUG = process.env.AUTOLEARN_DEBUG === "1"
 export const DBG_FILE = join(AL_HOME, "debug.log")
@@ -199,12 +199,16 @@ const WRAPPER_CONTENT = `#!/bin/sh
 AL="\${AUTOLEARN_HOME:-\$HOME/.autolearn}"
 GATE="\$AL/.review_gate"
 LOCK="\$AL/.last_wrapper_review"
-MIN_INTERVAL=1800000
+# Default 3 min: serialize bursts machine-wide without starving cadence.
+# (The in-plugin dedupe gate handles the same-conversation case.)
+MIN_INTERVAL_MS=180000
 CFG="\$AL/personas/default/config.yaml"
 if [ -f "\$CFG" ]; then
   MI=\$(sed -n 's/^min_interval_ms:[[:space:]]*//p' "\$CFG" | head -1 | tr -d '[:space:]')
   case "\$MI" in ''|*[!0-9]*) ;; *) MIN_INTERVAL="\$MI" ;; esac
 fi
+# Convert ms -> seconds for the shell arithmetic.
+MIN_INTERVAL_S=\$(( MIN_INTERVAL / 1000 ))
 NOW=\$(date +%s)
 # Gate 3 first (cheap, no state change): identical conversation → skip.
 # NOTE: the plugin passes the review markdown CONTENT as \$1 (it becomes the
@@ -218,10 +222,10 @@ if [ -n "\$CONV" ]; then
     exit 0
   fi
 fi
-# Gate 2: start-to-start spacing.
+# Gate 2: start-to-start spacing (seconds).
 LAST=\$(cut -d: -f1 "\$LOCK" 2>/dev/null)
 case "\$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
-if [ \$(( (NOW - LAST) * 1000 )) -lt "\$MIN_INTERVAL" ]; then
+if [ \$(( NOW - LAST )) -lt "\$MIN_INTERVAL_S" ]; then
   exit 0
 fi
 # Gate 1: atomic claim. Losers exit; a gate older than 15 min is stale
